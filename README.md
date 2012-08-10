@@ -1,15 +1,15 @@
 real-estate-manager
 ===================
 
--Java Object Relational Mapping
+##Java Object Relational Mapping
 
---Abstract
+###Abstract
 
   The basis for this framework is to provide our a number of vital functionality in a uniform, dependable, and extensible manner.  This framework will be referred to as the Database Management Framework  (DMF).  The DMF will have the responsibility of persisting, synchronizing, protecting, and delivering data in a timely, reliable, and consistent manner.  In addition, history and basic versioning will be inherently supported by this system.
 
-Design
+###Design
 	
-Database Object (DBO)
+####Database Object (DBO)
 
 	A database object is an entity that will be persisted in the MySQL database.  A DBO shall provide functionality for committing and retrieving it's fields as well as locking the object itself.  The DBO shall encapsulate ALL raw SQL statements and provide strictly Java interfaces for other extending objects.  In other words, the SQL statements shall be designed to be “once” written and other objects implementing DBO will not have SQL statements in their code.  
 	DBOs are stored in the database in such a way that each class will have it's own table.  The attributes for the table will be the fields for the class.  Note, only the fields defined by the class will be in the table, excluding fields in the parent class.  Furthermore, each parent class will have its own table and will follow the above scheme.  As a result of this scheme, an instance of a Java class will be represented through a number of tables.  For example, consider the simple case of a Student.  A Student is a class that extends Person.  Since we want these classes to be persisted, Person will extend DBO.  An instance of Student will have their information scattered in the database throughout the three tables, Student, Person, and DBO.  
@@ -28,104 +28,101 @@ Database Object (DBO)
 	Strings, timestamps, integers, and enumerations are all represented by MySQL as data types.  DBOs referenced by other objects are referenced by their version chain.  All other objects cannot be persisted in this scheme.  Fields that are not to be stored in the database should have the transient modifier.  
 	Lists and maps are special data types that receive special treatment.  Lists and maps will both be of a generic type or types.  For any type of list or map, each will have their own table.  For example all lists of type string will be in one table.  All maps of key type integer and value type String will be in another table.  Each of these tables must have attributes that can relink the data with its owning object.  As a result, the class, field and IID of the owner are all stored.  This is all the necessary data for the owning object to retrieve its list or map items for a particular field from the database.  
 
-Schema Management
+###Schema Management
 
 	The database schema will be managed by a Database Manager (DM).  The DM will be  responsible for registering classes and making sure they are properly represented in the database.  If fields are added to a class, the DM is responsible for reflecting this change by adding a column to the database.  When a field is removed, the column is NOT removed from the database.  The DM also is responsible for utility functions such as determining if a field is persistable, getting the table name based on the class, and executing SQL statements.
 	
 
-Office Productivity Framework
+##Office Productivity Framework
 	
-Abstract
+###Abstract
 
 	Actions such as tasking and scheduling will be incorporated into an Office Productivity Framework (OPF).  Similar to a bug tracker in software design the OPF will be used to post tasks that can be assigned to other users of the program.  Tasks can be prioritized, have deadlines, be attached to DBOs, and have notes.  This will be important to track the history of the office and vital changes made in the system.  
 	Setting up meetings with other users will be facilitated through this framework as well.  This framework will interact with Messaging Framework (discussed in detail later), to distribute notifications to other users.  The ultimate goal of the OPF is to provide the essential tools for office communication and organization.  
 
-Design
+###Design
 
 	A Task will be the abstract entity in which all other  specific tasks needed in the future will derive from.  The Task will have information about when it was created, who created it, a priority, a percent done, a due date, a category, and attachments.  Attachments are any type of DBO, including a Note.  A Note extends DBO and supports basic note-like functionality.  A note has information for who created the note, when it was created, and the details of the note.  Since a note has the ability to have any DBO attached to it, this will facilitate powerful and handy GUI tools for reminders and “sticky” like notes.  
 	There are two specific types of tasks that shall be implemented.  The first type is an Office Task (OT).  An OT will be a task that can be assigned to another member of the team, that being another user of the program.  Another type of task is a Personal Task (PT).  A PT will be a private note that will only be visible by the creator.  This will act in place of a human physically using a Post-It note and sticking it to their monitor.  The benefit of having the Post-It like PT digitalized is that it will be available anywhere.  
 
-Integration
+###Integration
 
 	Aside from the Personal Task, when tasks are created, they will be sent to other users via the Messaging Framework.  In addition, the OPF will be created with DBOs and will therefore require the DMF.  The tasks will be interacting with the business and financial modules as well.  
 
-Graphical User Interface
+##Graphical User Interface
 
-Abstract
+###Abstract
 
 	The goal of the user interface is to provide seamless interaction with the information stored in the system.  The user interface should help guide the user along and provide tools for automating tasks.  It should be smart and try to predict user input as much as possible.  To facilitate the users need for a flexible and dynamic interface, we will be using the FlexDock framework.  FlexDock allows the user to easily move, tab, or detach components from the main window.  
 
-Design
+###Design
 
 	The GUI will have a base framework that will take care of the Human Interface Guidelines (HIG) suggested by Sun.  This includes button spacing, margins, text size, button phrases, message types, and much more.  It will help standardize our dialogs and components.  FlexDock uses Views which are made of dockable and undockable components.  A View itself is a dockable component.  Views are combined to create a Perspective that can be saved and adjusted by the user.  Any panel from the Swing framework can be made dockable or added to a View.  Views can be tabbed or they can be next to each other separated by split panes.  
 
-Messaging Framework
+##Messaging Framework
 
-Abstract
+###Abstract
 	The basis for this framework is to pass messages from one application to another.  For example, users from a given office will generate messages that need to be consumed by every employee of that office.  The Messaging Framework handles broadcasting a single message to multiple users, as well as sending a message to an individual user.  The Message Framework utilizes two models for passing messages.  The first model is the point-to-point model, where a single user sends a message to a known destination.  This is also known as the queuing model, where a user sends a message to a queue and a different user, who may or may not be online at the time, receives the message.  The second model is publisher and subscriber, in which a single user sends a message to many users.  In this model, the sender does not know how many users will receive the message.  The sender posts a message to a given topic, and all subscribers of that topic will receive the message.  Subscribers to a given topic can come and go at any time, so it is impossible for the sender to know the destination of his or her message, along with the number of users who will receive the message.  For this project, the protocol used to pass messages is TCP.
 
-Components
+###Components
 
-Message Admin
+####Message Admin
 	
 	The Message Admin component allows for the creation of messaging queues and topics dynamically at runtime.  Each user of the application will have his or her own queue for receiving private messages and system messages.  All users will have an Office Project that they are currently working on.  Users who are working on an Office Project may need to send messages to all other workers on the project.  Therefore, a topic is created for each Office Project.  Workers for each Office Project will become subscribers to the Office Project Topic for which they are working on.  This allows users to receive messages addressed to themselves, as well as messages intended for everyone working on their project.  The Message Admin is responsible for creating new queues and topics at runtime.  When a new user registers for the system, a queue must be created.  Likewise, when a new Office Project is created, a topic must be created.  The Message Admin implements this functionality.
 
-Message Manager
+####Message Manager
 
 	The goal of the Message Manager is to simply send and receive all messages of the system.  The Message Manager is the gateway for all components of the application to send messages.  The Message Manager also handles registering listeners for each topic and queue that the end user needs to receive messages from.  The Message Manager registers listeners for the user's own queue and the user's Office Project topic.  For all messages that are being sent, the Message Manager determines the correct destination.  Messages will either enter a queue or become published to a topic.  Messages sent using the Message Manager are reliable.  Upon receiving a message, an acknowledgement is sent.  If the acknowledgement message is not received by the server, the original message will be retransmitted.  The Message Manager will send objects of type NotificationMessage, which is the base type for all messages passed within the application and is serializable.
 
-Destination Listener
+####Destination Listener
 
 	The Destination Listener is responsible for receiving all messages.  A Destination Listener simply listens for new messages in a given queue or topic in a separate thread and notifies the application once a message has been received.  When the Destination Listener receives a message, the  message type is examined and the correct component is invoked in order to process the message.
 
-Class Diagram
-
-
-Integration
+###Integration
 
 	The Message Framework is utilized by the Database Layer in order to convey when objects are committed to the database.  When a user commits an object to the database, all other users of the same Office Project will receive a notification.  For example, if a user makes a change to an agent's contact information, all members of the project will be notified of this change.  This is critical to helping the end users increase productivity.  We want the end users to increase productivity by increasing communication between one another.  This will result in less duplicate work done and more time spent doing useful work.  
 	The Messaging Framework is also used to notify when users log in or log out of the system.  Users of the same Office Project will receive notification when coworkers log in and log out of the system.  The goal is to connect users who are working on the same project.  Knowing which coworkers are online is essential for productivity.  In addition, a list of currently logged in coworkers is displayed, which will allow the user to chat, transfer files, and start a Peer 2 Peer transaction.    
 	Each user of the system will have their own queue for private messages.  This allows for users to chat with one another using the Message Framework.  By using queues for chat messages, this allows for the ability to send messages to users who are not currently logged into the system.  In such a case, when the message receiver logs into the system, he or she will receive all messages that were missed while not logged in.  This will allow for a common method for users to send and receive both instant messages as well as more traditional email messages.
 	
-Financial Accounting Module
+##Financial Accounting Module
 
-Abstract
+###Abstract
 
 	The goal of the financial engine is to mirror real world financial accounting process that occur within the realm of real estate. Financial accounting itself is a discipline independent of computer science and thus requires research to fully understand the processes involved.  To obtain an idea of what exactly a financial accounting engine is responsible for it was helpful to seek input from the end user.  Once an understanding of expectations were obtained the independent research then followed.
 	The financial accounting engine would be responsible for maintaining a “Double Entry” bookkeeping  style of accounting.  Entities involved with Double Entry bookkeeping are Accounts, Ledger, Journals, Journal Entries, and Statements.  The Accounts represent a monetary amount, called the Account balance, with respect to a specific category within the business.  The value an Account represents should have the ability to be negative as well as positive with respect to the business.  A Journal Entry represents the transfer of amounts between Accounts.  A Journal Entry may consist of as little as 2 line items but could potentially contain infinite line items.  These line items will be hence forth be referred to as Journal Entry Line Items.  Choosing an arbitrary collection of Journal Entry Line Items however is not how a Journal Entry is formulated.  A welcome discovery in the financial accounting world was that there exists a formula which governs which Journal Entries are valid and which are not.  Any transfer of a monetary amount in the financial accounting world must obey the equation “Asset = Liability + Owner's Equity” where each Assets, Liability, and Owner's Equity are categorizations of Accounts.  Double Entry bookkeeping is designed in such a way that Accounts are created for all transactions which have value (negative and positive) with respect to the business, and so an additional requirement is that the Journal Entry's negative and positive flow of value must be equivalent.  Each Account will have an associated Ledger which is responsible for maintaining all Journal Entry Line Items which pertain to its balance.  These Ledger will often be used by the end user is a query fashion and must be independent yet composable.  For example the end user may wish to view all Ledgers for all Accounts whose type is Asset.  The “General” Ledger, which is a collection of all Ledgers for each Account, is commonly consulted to view the financial status of a company.  A Journal is responsible for containing none to many Journal Entries.  The difference between a Ledger and a Journal is that a Journal does not break down a Journal Entry but maintains each one as a whole.  Therefore there will be duplicate information between Journals and Ledger, and Ledgers can be observed as view points specific to Accounts for all Journals.  A Statement is the output of the financial accounting engine.  Statements will serve as visual reports, or summary, of the balances of specific Accounts at a specific time.  Each Statement includes specific Accounts (or information regarding Accounts) that yields real world business meaning.  There are 4 statements which are required as standard by the Generally Accepted Accounting Principles (US GAAP) which are, Balance Sheet, Income Statement, Retained Earnings Statement, and Cash Flow Statement.  Each of these Statements must be handled by the financial accounting engine.
 
-Design
+###Design
 
 	After researching what entities were involved in financial accounting world it then had to be translated into the world of computer science.  The design principles considered were all relative to  the object oriented paradigm.  The top level classes intuitively followed as described previously: Account, Ledger, Journal, Journal Entry, and Statement.  In addition to being separate classes the following core internal modules were created Account, Ledger, Journal, and Statement. To enhance flexibility and meet the end user needs the Equation and Template secondary modules were created.  The dependencies amongst these modules has been refined as understanding of the subject matter increased, and as the growing infrastructure demanded.  Many of the features of each individual entity is the result of features required by other entities, as a result the design explanation may be difficult to understand on the first pass.
 
-Account Module
+##Account Module
 
 	Although all modules of the financial engine are important, the Account module is the most central module. It was made apparent from the start that financial accounting has some concept of positive and negative amounts, which translates to DEBIT (generally positive amounts with respect to the business) and CREDIT (generally negative amount with respect to the business).  Since all amounts are associated with this signing convention a balance system was created that handles all additive operations of these amounts.  This system is encapsulated in a class called AcctBalanceSystem.  The Account system must be dynamic as new Accounts can be added to the system as the need arises.  The Accounts must also stay organized in a hierarchical structure, and therefore will be maintained in a tree structure.  The balance systems between parent and child Account remain programatically independent but logically provide organization between similar elements.  In the financial world the Account persists throughout the lifetime of the bookkeeping system, leaving no way to handle every day costs, as a result the TemporaryAccount is used to handle this purpose.  The TemporaryAccount entity is an Account with additional information, and therefore TemporaryAccount inherits from Account.  There is also and additional requirement for the ability to categorize each Account transaction (transfer of balance amount).  For example the end use may want to generate a Statement based off of Account activity based on the nature of each activity.  These categories must also be composite in a tree like structure to mirror real world grouping and relational situations.  The AcctActionCategory class will handle the categorization of account transaction.  The Account module requires a central location to maintain a synchronized and consistent state, not only in a single client, but throughout all clients.  The AccountManager will server this purpose, and being a singleton class it will deal with registering Accounts with respect to the financial engine.  Accounts must be registered with the AccountManager to be used in other modules of the financial engine.  The AccountManager will provide an abstraction of the underlying classes within the Account module, and allow for easy access for external modules.
 
-Journal Module
+##Journal Module
 
 	The Journal module is the next most central module, as it exclusively deals with Accounts.  This module encapsulates the JournalEntry class, which provides all features as previously discussed.  An important responsibility the JournalEntry holds is to ensure the accounting equation (Asset=Liability+Owner's Equity) is satisfied, and thus financial engine will adhere to financial standards.  Each JournalEntry consists of a collection of JournalEntryLineItems and each JournalEntryLineItem will hold an amount to apply, and an Account to apply that amount to.  A Journal will maintain a collection of JournalEntry objects.  Similar to the Account module the Journal module exposes a singleton class to satisfy data consistency and synchronization concerns.  The JournalManager will require each Journal object to be registered in order for use with other modules, and will also be responsible for adding JournalEntry objects to their corresponding Journals.
 
-Ledger Module
+##Ledger Module
 
 	The Ledger module logically follows next as it depends on the Account and Journal module.  The Ledger module is responsible for maintaining a collection of Ledger object which correspond one-to-one with Account objects.  The AccountManager will register each new Account with the LedgerManager, and the LedgerManager will then provide an interface to other modules for access to the corresponding Ledger.  The JournalManager will record JournalEntryLineItem objects to corresponding Ledgers though the LedgerManager.  The intermodule relation will ensure that the LedgerManager remains current, and consistent.
 
-Statement Module
+##Statement Module
 
 	The Statement module remains as the final core module.  This module uses information from the Account module and also information generated by the Journal module.  A Statement is organized in a hierarchical fashion which will be represented as a tree data structure.  The Statement contains a collection of root level StatementContributions, and each StatementContribution maintains is relationship with the tree.  The StatementContribution consists of a collection of StatementContributionLineItems where each implementing Statement will implement the functionality to fit specific requirements.  To maintain generality the design abstracts two types of Statements on top of the abstract Statement layer.  The AccountStatement result will be driven by a collection of Account objects, and the CategoryStatement will generate a summary of a AcctActionCategory tree within a specific Account.
 
-Finance Module
+##Finance Module
 
 	Each of these core modules will drive the functionality of the financial engine, but these alone will not be sufficient to mirror real world functionality.  In the real world journals, journal entries, and statements are only relevant to the current fiscal period.  This brought an opportunity to encapsulate the functionality of all core modules, as well as maintain collections of these managers with respect to the corresponding fiscal year.  The singleton class FinanceManager was introduced to serve this purpose and will be the entry point into the financial engine.
 	Design considerations were also made with respect to flexibility.  Flexibility considerations were emphasized by the end user, and thus were taken into consideration were ever possible.  For example a desire to create custom statements, and also the ability to persist commonly occurring journal entries for later use. This quality attribute resulted in the secondary modules Template and Equation.
 
-Equation Module
+##Equation Module
 
 	The financial engine is responsible for numerous algebraic computations and simple mathematics.  Therefore to increase flexibility the Equation module will allow flexible, and general computation power.  The Equation module can be broken down into two sub modules, namely the Parser and the Evaluator.  The Parser module is responsible for taking a string of characters, ensuring the string adheres to mathematical form, and translates the string of characters into a collection of Token objects.  The Parser module accepts variables, which can be set at any time before evaluation, and functions which are predefined. Some examples of functions are sum, min, max, average, and count.  Once the Token objects are formed the Evaluator has the responsibility of reducing the expression to the mathematically consistent result.  In order for the evaluation to complete successfully all variables must be assigned a value.
 
-Template Module
+##Template Module
 	The Template module takes advantage the functionality provided by the Equation module. A Template is an abstract concept whose purpose is to serve as a skeleton structure for commonly occurring events.  The Template design process goal was to be able to handle the most general situation to accommodate for commonly occurring financial actions.  The Template was therefore designed to maintain a tree structure of TemplateContribution objects.  Each TemplateContribution object maintains a collection of TemplateLineItem objects to provide an additional level of customization to implementing units. The TemplateLineItem contains an Equation and an DEBIT or CREDIT amount which represents the sign of the evaluated equation.  Each TemplateContribution maintains a collection of global variables to allow fast access to variable assignments, and each TemplateContribution's global variable system remains synchronized with its children and parent nodes.  The Template itself also maintains a collection of global variables, which remains synchronized with each TemplateContribution contained within.  This global variable structure allows for uniform assignment of variables at the Template level.  Some specific implementations of the Template module are JournalEntryTemplate and StatementTemplate.  These implementations provide the flexibility desired by the end user and provide a skeletal structure for commonly occurring journal entries, and statements.
 
-Integration
+##Integration
 
 	The infrastructure, specifically the database module, has influenced the design of the financial engine in numerous aspects.  The driving factor between these design decisions was to automate, or completely encapsulate, the financial engine operations from all other modules.  For example committing a Journal Entry to the database will directly effect Account balances.  In this situation the financial engine should not delegate any responsibilities to keep Accounts synchronized with respect to the database.  The responsibility of synchronization is easily accommodated by the described design and this functionality is delegated to each module's manager.
