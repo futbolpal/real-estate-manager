@@ -1,9 +1,9 @@
 real-estate-manager
 ===================
 
-*Java Object Relational Mapping
+-Java Object Relational Mapping
 
-**Abstract
+--Abstract
 
   The basis for this framework is to provide our a number of vital functionality in a uniform, dependable, and extensible manner.  This framework will be referred to as the Database Management Framework  (DMF).  The DMF will have the responsibility of persisting, synchronizing, protecting, and delivering data in a timely, reliable, and consistent manner.  In addition, history and basic versioning will be inherently supported by this system.
 
