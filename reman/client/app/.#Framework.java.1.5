@@ -1,0 +1,153 @@
+package reman.client.app;
+
+import java.io.IOException;
+import java.io.ObjectOutputStream;
+import java.net.Socket;
+import java.net.UnknownHostException;
+import java.sql.SQLException;
+import java.util.ArrayList;
+
+import javax.swing.UIManager;
+import javax.swing.UnsupportedLookAndFeelException;
+
+import reman.client.app.chatter.ChatServer;
+import reman.client.app.listeners.ClientStatusListener;
+import reman.client.app.listeners.DboChangedListener;
+import reman.client.gui.FrameworkWindow;
+import reman.client.gui.LoginDialog;
+import reman.common.ClientStatusMessage;
+import reman.common.DboChangedMessage;
+import reman.common.NotificationMessage;
+import reman.common.ProjectNotificationMessage;
+import reman.common.ClientStatusMessage.UserStatus;
+import reman.common.database.OfficeProjectManager;
+import reman.common.database.UserManager;
+
+public class Framework {
+  private static Framework this_;
+
+  private FrameworkWindow window_;
+
+  private Socket server_sock_;
+  private ObjectOutputStream server_out_;
+  private ArrayList<ClientStatusListener> client_status_listeners_;
+  private ArrayList<DboChangedListener> dbo_changed_listeners_;
+
+  private Framework() {
+    client_status_listeners_ = new ArrayList<ClientStatusListener>();
+    dbo_changed_listeners_ = new ArrayList<DboChangedListener>();
+  }
+
+  private void start() throws SQLException {
+    LoginDialog.login();
+    /*The login dialog halts until successful login*/
+
+    /* Create a thread to listen to the server */
+    try {
+      server_sock_ = new Socket("localhost", 1025);
+      server_out_ = new ObjectOutputStream(server_sock_.getOutputStream());
+
+      /* Notify server client has logged in */
+      sendMessage(new ClientStatusMessage(UserStatus.LOGGED_IN));
+
+      /* Create a thread to listen to the server */
+      ServerListener sl = new ServerListener(server_sock_);
+      sl.start();
+    } catch (UnknownHostException e) {
+      e.printStackTrace();
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+
+    /* Create window*/
+    window_ = new FrameworkWindow();
+    window_.setTitle("Welcome, "
+	+ UserManager.instance().getCurrentUserInfo().getDisplayName());
+
+    /* Launch chat server */
+    ChatServer.instance().start();
+  }
+
+  public void sendMessage(ProjectNotificationMessage m) {
+    if (server_out_ == null)
+      return;
+    try {
+      server_out_.writeObject(m);
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+  }
+
+  public void distributeMessage(NotificationMessage m) {
+    if (m instanceof ProjectNotificationMessage) {
+      ProjectNotificationMessage pm = (ProjectNotificationMessage) m;
+      if (pm.getProjectID() != OfficeProjectManager.instance()
+	  .getCurrentProject().getID())
+	return;
+
+      if (pm instanceof ClientStatusMessage) {
+	synchronized (client_status_listeners_) {
+	  //distribute to client listeners
+	  for (ClientStatusListener c : this.client_status_listeners_) {
+	    c.clientStatusChanged((ClientStatusMessage) m);
+	  }
+	}
+      } else if (pm instanceof DboChangedMessage) {
+	synchronized (dbo_changed_listeners_) {
+	  for (DboChangedListener d : this.dbo_changed_listeners_) {
+	    d.dboChangedEvent((DboChangedMessage) m);
+	  }
+	}
+      }
+    }
+  }
+
+  public synchronized void addClientStatusListener(ClientStatusListener c) {
+    System.out.println(this.client_status_listeners_.size());
+    this.client_status_listeners_.add(c);
+  }
+
+  public synchronized void removeClientStatusListener(ClientStatusListener c) {
+    this.client_status_listeners_.remove(c);
+  }
+
+  public synchronized void addDboChangedListener(DboChangedListener d) {
+    this.dbo_changed_listeners_.add(d);
+  }
+
+  public synchronized void removeDboChangedListener(DboChangedListener d) {
+    this.dbo_changed_listeners_.remove(d);
+  }
+
+  public FrameworkWindow getWindow() {
+    return window_;
+  }
+
+  public void setStatus(String text) {
+    window_.getFrameworkStatusBar().setStatus(text);
+  }
+
+  public void close() {
+    try {
+      UserManager.instance().logout();
+      this.sendMessage(new ClientStatusMessage(UserStatus.LOGGED_OUT));
+      System.exit(0);
+    } catch (SQLException e) {
+      e.printStackTrace();
+    }
+  }
+
+  public static Framework instance() {
+    if (this_ == null)
+      this_ = new Framework();
+    return this_;
+  }
+
+  public static void main(String[] args) throws ClassNotFoundException,
+      InstantiationException, IllegalAccessException,
+      UnsupportedLookAndFeelException, SQLException {
+    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+
+    Framework.instance().start();
+  }
+}

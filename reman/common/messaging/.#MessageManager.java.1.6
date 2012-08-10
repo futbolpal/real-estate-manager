@@ -1,0 +1,190 @@
+package reman.common.messaging;
+
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Hashtable;
+import javax.jms.Connection;
+import javax.jms.ConnectionFactory;
+import javax.jms.Destination;
+import javax.jms.JMSException;
+import javax.jms.MessageProducer;
+import javax.jms.ObjectMessage;
+import javax.jms.Session;
+import javax.naming.Context;
+import javax.naming.InitialContext;
+import javax.naming.NamingException;
+
+import reman.client.app.chatter.ChatMessage;
+import reman.common.database.OfficeProjectManager;
+import reman.common.database.UserManager;
+
+public class MessageManager {
+	private static MessageManager this_;
+	private JMSConfig config_;
+	@SuppressWarnings("unchecked")
+	private Hashtable properties_;
+	private ArrayList<DestinationListener> listeners_;
+	
+	private ConnectionFactory factory_;
+	private Connection connection_;
+	private Session session_;
+	private Context context_;
+
+	@SuppressWarnings("unchecked")
+	private MessageManager(JMSConfig config) {
+		listeners_ = new ArrayList<DestinationListener>();
+		config_ = config;
+		properties_ = new Hashtable();
+		properties_.put(Context.INITIAL_CONTEXT_FACTORY, "org.exolab.jms.jndi.InitialContextFactory");
+		properties_.put(Context.PROVIDER_URL, config_.getHost());
+		properties_.put(Context.SECURITY_PRINCIPAL, config_.getUserName());
+		properties_.put(Context.SECURITY_CREDENTIALS, config_.getPassword());
+		
+		initializeConnection();
+	}
+
+	private void initializeConnection() {
+		try {
+			context_ = new InitialContext(properties_);
+			factory_ = (ConnectionFactory) context_.lookup(config_.getFactoryName());
+			connection_ = factory_.createConnection();
+			session_ = connection_.createSession(false, Session.AUTO_ACKNOWLEDGE);
+			connection_.start();
+		} catch (JMSException e) {
+			e.printStackTrace();
+		} catch (NamingException e) {
+			e.printStackTrace();
+		}
+	}
+	
+	/* this is totally not needed.. */
+	public Boolean startJMSProcess() {
+		System.out.println("Starting JMS Server...");
+		String[] command = new String[3];
+		if (config_.isWindows()) {
+			command[0] = "cmd.exe";
+			command[1] = "/C";
+			command[2] = config_.getStartupScript();
+		} else {
+			//TODO: make this work on linux
+			return false;
+		}
+		try {
+			Runtime rt = Runtime.getRuntime();
+			Process proc = rt.exec(command);
+			//listen for any error messages from the process
+			StreamListener errorListener = new StreamListener(proc.getErrorStream(), "Error");
+			//same for other general output
+			StreamListener outputListener = new StreamListener(proc.getInputStream(), "Output");
+			errorListener.start();
+			outputListener.start();
+			int exitCode = proc.waitFor();
+			System.out.println("exit code: " + exitCode);
+			return (exitCode == 0);
+		} catch (Throwable t) {
+			t.printStackTrace();
+			return false;
+		}
+	}
+
+	private void send(Serializable contents, String dest_name) {
+		Destination dest = null;
+		MessageProducer sender = null;
+		try {
+			dest = (Destination) context_.lookup(dest_name);
+			sender = session_.createProducer(dest);
+			//create and send the message
+			ObjectMessage outgoingMsg = session_.createObjectMessage();
+			outgoingMsg.setObject(contents);
+			sender.send(outgoingMsg);
+		} catch (JMSException e) {
+			e.printStackTrace();
+		} catch (NamingException e) {
+			e.printStackTrace();
+		}
+	}
+	
+	public void send(Long uid, ChatMessage msg){
+		String dest_name = MessageManager.formatQueueName(uid);
+		this.send(msg, dest_name);
+	}
+	
+	public void send(NotificationMessage msg) {
+		String dest_name = null;
+		//determine message type
+		if (msg instanceof ProjectNotificationMessage) {
+			ProjectNotificationMessage p = (ProjectNotificationMessage) msg;
+			//make sure we're sending the notification to a valid project
+			long id = p.getProjectID();
+			if (id < 0)
+				return;
+			dest_name = MessageManager.formatTopicName(id);
+		}
+		this.send(msg, dest_name);
+	}
+	
+	public void createOfficeProject(long id) {
+		String topicName = MessageManager.formatTopicName(id);
+		MessageAdmin.createDestIfNotExists(config_, topicName, false);
+	}
+	
+	public void createUser(long id) {
+		String queueName = MessageManager.formatQueueName(id);
+		MessageAdmin.createDestIfNotExists(config_, queueName, true);
+	}
+
+	public void registerListeners() {
+		//create a listener for the current user's project messages and one for his/her private messages
+		String queueName = MessageManager.formatQueueName(UserManager.instance().getCurrentUserID());
+		String topicName = MessageManager.formatTopicName(OfficeProjectManager.instance()
+				.getCurrentProject().getID());
+
+		DestinationListener projectMessageListener = new DestinationListener(topicName,
+				new ProjectMessageHandler(), properties_, config_.getFactoryName());
+		DestinationListener privateMessageListener = new DestinationListener(queueName,
+				new PrivateMessageHandler(), properties_, config_.getFactoryName());
+		projectMessageListener.start();
+		privateMessageListener.start();
+		
+		listeners_.add(projectMessageListener);
+		listeners_.add(privateMessageListener);
+	}
+	
+	public void stopListeners() {
+		for(DestinationListener d : listeners_) {
+			d.closeConnection();
+		}
+	}
+	
+	public void close() {	
+		if (context_ != null) {
+			try {
+				context_.close();
+			} catch (NamingException e) {
+				e.printStackTrace();
+			}
+		}
+		if (connection_ != null) {
+			try {
+				connection_.close();
+			} catch (JMSException e) {
+				e.printStackTrace();
+			}
+		}
+	}
+
+	public static String formatTopicName(Long project) {
+		return "ProjectTopic_" + project;
+	}
+
+	public static String formatQueueName(Long user) {
+		return "UserQueue_" + user;
+	}
+
+	public static MessageManager instance() {
+		if (this_ == null)
+			this_ = new MessageManager(JMSConfig.WILL());
+		
+		return this_;
+	}
+}

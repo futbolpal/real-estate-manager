@@ -1,0 +1,296 @@
+package reman.client.app.finance.accounts;
+
+import java.sql.SQLException;
+import java.util.Enumeration;
+import java.util.Hashtable;
+
+import reman.client.app.OfficeProject;
+import reman.client.app.finance.FinanceException;
+import reman.client.app.finance.TransactionType;
+import reman.client.app.finance.journals.Journal;
+import reman.client.app.finance.journals.JournalEntry;
+import reman.client.app.finance.journals.JournalEntryLineItem;
+import reman.common.database.DatabaseObject;
+import reman.common.database.OfficeProjectManager;
+import reman.common.database.exceptions.LockedException;
+
+/**
+ * To create a new account and manage existing accounts per office project
+ * 
+ * TODO: optimize storage of account list to be represented by a tree, keyed by parent account
+ * @author Scott
+ *
+ */
+public class AccountManager extends DatabaseObject {
+
+	private static transient AccountManager this_;
+
+	private Hashtable<String, Account> accounts_;
+
+	/**
+	 * True if in initialization phase, where new account values can be initialized
+	 */
+	private boolean init_phase_;
+
+	private AccountManager() {
+		accounts_ = new Hashtable<String, Account>();
+		init_phase_ = true;
+	}
+
+	public static AccountManager instance() {
+		if (this_ == null)
+			this_ = new AccountManager();
+		return this_;
+	}
+
+	public Account getAccount(String acct_name) throws IllegalArgumentException,
+			SecurityException, SQLException, IllegalAccessException,
+			NoSuchFieldException, ClassNotFoundException, InstantiationException {
+		this.retrieve();//ensure account map up to date
+		
+		return this.accounts_.get(acct_name);
+	}
+
+	/**
+	 * Get all accounts where their types equal param 'type'. Indexed by account name
+	 * 
+	 * @param type
+	 * @return
+	 * @throws InstantiationException 
+	 * @throws ClassNotFoundException 
+	 * @throws NoSuchFieldException 
+	 * @throws IllegalAccessException 
+	 * @throws SQLException 
+	 * @throws SecurityException 
+	 * @throws IllegalArgumentException 
+	 */
+	public Hashtable<String, Account> getExistingSubTypes(AcctType type)
+			throws IllegalArgumentException, SecurityException, SQLException,
+			IllegalAccessException, NoSuchFieldException, ClassNotFoundException,
+			InstantiationException {
+		this.retrieve();//ensure account map up to date
+		
+		Hashtable<String, Account> sub_types = new Hashtable<String, Account>();
+		Enumeration<String> all_keys = this.accounts_.keys();
+		while (all_keys.hasMoreElements()) {
+			String curr_key = all_keys.nextElement();
+			Account curr_acct = this.accounts_.get(curr_key);
+			if (curr_acct.getAcctType().equals(type))
+				sub_types.put(curr_key, curr_acct);
+		}
+
+		return sub_types;
+	}
+
+	/**
+	 * Get all accounts that are child accounts of param 'acct'
+	 * 
+	 * @param acct
+	 * @return
+	 * @throws InstantiationException 
+	 * @throws ClassNotFoundException 
+	 * @throws NoSuchFieldException 
+	 * @throws IllegalAccessException 
+	 * @throws SQLException 
+	 * @throws SecurityException 
+	 * @throws IllegalArgumentException 
+	 */
+	public Hashtable<String, Account> getExistingSubTypes(Account acct)
+			throws IllegalArgumentException, SecurityException, SQLException,
+			IllegalAccessException, NoSuchFieldException, ClassNotFoundException,
+			InstantiationException {
+		this.retrieve();//ensure account map up to date
+		
+		Hashtable<String, Account> sub_types = new Hashtable<String, Account>();
+
+		Enumeration<String> all_keys = this.accounts_.keys();
+		while (all_keys.hasMoreElements()) {
+			String curr_key = all_keys.nextElement();
+			Account curr_acct = this.accounts_.get(curr_key);
+
+			/*TODO: verify that sub accounts always have the same account type as parent type*/
+			if (!curr_acct.getAcctType().equals(acct.getAcctType()))
+				continue;
+
+			/*iterate though each account's parent accounts, if 'acct' is found then add to list*/
+			Account curr_parent = curr_acct.getParentAcct();
+			while (curr_parent != null) {
+				if (curr_parent.equals(acct)) {/*'curr_acct' is a sub type of 'acct'*/
+					sub_types.put(curr_key, curr_acct);
+					break;
+				}
+			}
+		}
+		return sub_types;
+	}
+
+	/**
+	 * Used to create an account within the current project. 'balance' will only be considered if the
+	 * program is in the initialization state with respect to finances.
+	 * 
+	 * @param name Name of the account. Key in hashtable of accounts (Must be unique with respect to other accounts).
+	 * @param balance Starting balance of the account.  Only relevant if program in initialization of finances state. Can be passed as 'null'
+	 * @param parent_acct Parent type (if applicable) of this account.  Can be passed as 'null'.
+	 * @param a_type This account type.  If a 'parent_acct' is passed this much match the 'parent_acct' type
+	 * @param normal_balance What type of transaction increases this account.
+	 * @param t_scale
+	 * @return The account that was created and maintained within this AccountManager, null if failure to create.
+	 * @throws InstantiationException 
+	 * @throws ClassNotFoundException 
+	 * @throws NoSuchFieldException 
+	 * @throws IllegalAccessException 
+	 * @throws SQLException 
+	 * @throws SecurityException 
+	 */
+	public Account createAccount(String name, AcctAmount balance,
+			Account parent_acct, AcctType a_type, TransactionType normal_balance,
+			AcctTimeScale t_scale) throws IllegalArgumentException, SecurityException, SQLException, IllegalAccessException, NoSuchFieldException, ClassNotFoundException, InstantiationException {
+		this.retrieve();//ensure account map up to date
+		if (!this.validateNewAccountInfo(name, parent_acct, a_type))
+			return null;
+
+		Account acct;
+		if (this.isInitilizationPhase() && balance != null)
+			acct = new Account(name, parent_acct, a_type, balance, normal_balance,
+					t_scale);
+		else
+			acct = new Account(name, parent_acct, a_type, normal_balance, t_scale);
+
+		accounts_.put(name, acct);
+		
+		/*commit new list to the database*/
+		this.commit();
+
+		return acct;
+	}
+
+	/**
+	 * Used to create/register a temporary account. 'balance' will only be considered if the
+	 * program is in the initialization state with respect to finances.
+	 * @param name
+	 * @param balance
+	 * @param parent_acct
+	 * @param close_to_acct
+	 * @param a_type
+	 * @param normal_balance
+	 * @return The account that was created and maintained within this AccountManager, null if failure to create.
+	 * @throws InstantiationException 
+	 * @throws ClassNotFoundException 
+	 * @throws NoSuchFieldException 
+	 * @throws IllegalAccessException 
+	 * @throws SQLException 
+	 * @throws SecurityException 
+	 * @throws IllegalArgumentException 
+	 */
+	public Account createTempAccount(String name, AcctAmount balance,
+			Account parent_acct, Account close_to_acct, AcctType a_type,
+			TransactionType normal_balance) throws IllegalArgumentException, SecurityException, SQLException, IllegalAccessException, NoSuchFieldException, ClassNotFoundException, InstantiationException {
+		this.retrieve();//ensure account map up to date
+		if (!this.validateNewAccountInfo(name, parent_acct, a_type))
+			return null;
+
+		if (!this.accounts_.contains(close_to_acct))
+			throw new IllegalArgumentException(
+					"close_to_acct must be contained within this AccountManager.");
+
+		TemporaryAccount temp_acct;
+		if (this.isInitilizationPhase() && balance != null)
+			temp_acct = new TemporaryAccount(name, parent_acct, balance,
+					close_to_acct, a_type, normal_balance);
+		else
+			temp_acct = new TemporaryAccount(name, parent_acct, close_to_acct,
+					a_type, normal_balance);
+
+		accounts_.put(name, temp_acct);
+
+		/*commit new list to the database*/
+		this.commit();
+		
+		return temp_acct;
+	}
+
+	private boolean validateNewAccountInfo(String name, Account parent_acct,
+			AcctType a_type) throws IllegalArgumentException {
+		if (name == null || name.isEmpty())
+			throw new IllegalArgumentException("Name must not be null or empty.");
+
+		/*TODO: will all accounts be in memory at this point for check?*/
+		/*check for duplicate name, and that parent already exists in the list*/
+		if (this.accounts_.containsKey(name))
+			return false;
+		if (parent_acct != null && !this.accounts_.containsValue(parent_acct))
+			throw new IllegalArgumentException("Parent account '" + parent_acct
+					+ "' must be contained in this AccountManager.");
+
+		/*TODO: verify that sub accounts always have the same account type as parent type*/
+		if (parent_acct != null && parent_acct.getAcctType() != a_type)
+			throw new IllegalArgumentException("Parent account type '"
+					+ parent_acct.getAcctType() + "' must be equal a_type.");
+		return true;
+	}
+
+	/**
+	 * Close 'close_from' into 'close_to'. Both accounts must reside in the 'accounts_' list.
+	 * The resulting journal entry is recorded in the general journal.
+	 * 
+	 * @param close_from
+	 * @param close_to
+	 * @param record_result_to The journal where the resulting journal entry will be recorded to
+	 * @return True if account 'close_from' was closed into 'close_to' and journal entry was successfully recorded in the general journal.
+	 * @throws ClassNotFoundException 
+	 * @throws IllegalAccessException
+	 * @throws IllegalArgumentException 
+	 * @throws SQLException 
+	 * @throws FinanceException 
+	 * @throws LockedException 
+	 * @throws InstantiationException 
+	 * @throws NoSuchFieldException 
+	 * @throws SecurityException 
+	 */
+	public boolean closeAccount(Account close_from, Account close_to,
+			Journal record_result_to) throws IllegalArgumentException,
+			IllegalAccessException, ClassNotFoundException, SQLException,
+			FinanceException, LockedException, SecurityException, NoSuchFieldException, InstantiationException {
+		this.retrieve();//ensure account map up to date
+		if (!accounts_.contains(close_from) || !accounts_.contains(close_to)
+				|| record_result_to == null)
+			throw new IllegalArgumentException(
+					"close_from and close_to must be contined within this AccountManager.  record_result_to can not be null.");
+
+		/*TODO: does an account need to be a 'TEMPORARY' account to close?*/
+
+		/*close_from_amount will zero the close_from account balance*/
+
+		JournalEntry je = new JournalEntry(
+				"Closing account '" + close_from.getName() + "' into account '"
+						+ close_to.getName() + "'.", null);
+		JournalEntryLineItem jeli = new JournalEntryLineItem(close_from, close_from
+				.getBalance().getInverseAmount(), "Closing account '"
+				+ close_from.getName() + ".");
+		je.addLineItem(jeli);
+		jeli = new JournalEntryLineItem(close_to, close_from.getBalance(),
+				"Result of closing account '" + close_from.getName() + "'.");
+		je.addLineItem(jeli);
+
+		/*TODO: if validation of journal entry is moved out of commit, then validate the entry*/
+		if (je.commit() > -1) {
+			if (record_result_to.addJournalEntry(je) != null)
+				return true;
+		}
+		
+		/*commit changes to journal*/
+		record_result_to.commit();
+		/*commit changed accounts to the database*/
+		this.commit();
+
+		return false;
+	}
+
+	public boolean isInitilizationPhase() {
+		return this.init_phase_;
+	}
+
+	public void turnOffInitilizationPhase() {
+		this.init_phase_ = false;
+	}
+}

@@ -1,0 +1,112 @@
+package reman.client.gui.forms;
+
+import java.awt.BorderLayout;
+import java.awt.Component;
+import java.awt.FlowLayout;
+import java.awt.Window;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.sql.SQLException;
+import java.util.ArrayList;
+
+import javax.swing.JButton;
+import javax.swing.JPanel;
+import javax.swing.border.TitledBorder;
+
+import reman.common.database.DatabaseObject;
+import reman.common.database.LockManager;
+
+public abstract class DboFormPanel<T extends DatabaseObject> extends JPanel {
+
+  protected T dbo_;
+
+  protected FormPanel form_;
+
+  protected ArrayList<DboFormPanel<?>> children_;
+
+  protected DboFormPanel<?> parent_;
+
+  protected boolean read_only_;
+
+  public DboFormPanel(String object_name) throws Exception {
+    this(object_name, null, null, false);
+  }
+
+  public DboFormPanel(String object_name, T o, DboFormPanel<?> parent,
+      boolean read_only) throws Exception {
+    read_only_ = read_only;
+    dbo_ = o;
+    children_ = new ArrayList<DboFormPanel<?>>();
+    parent_ = parent;
+
+    if (!read_only_ && dbo_ != null) {
+      if (LockManager.instance().isLocked(dbo_, false)) {
+	throw new Exception("Cannot lock object");
+      } else
+	LockManager.instance().lock(dbo_, false);
+    }
+
+    this.setBorder(new TitledBorder(object_name));
+    this.setLayout(new BorderLayout());
+    this.add(form_ = new FormPanel(), BorderLayout.CENTER);
+  }
+
+  public boolean isReadOnly() {
+    return read_only_;
+  }
+
+  public void setReadOnly(boolean f) {
+    read_only_ = f;
+    updateForm();
+  }
+
+  public final void commit() throws IllegalArgumentException, SQLException,
+      IllegalAccessException, ClassNotFoundException {
+    /* Commit children */
+    for (DboFormPanel<?> c : children_) {
+      c.commit();
+    }
+
+    if (read_only_)
+      return;
+
+    retrieveForm();
+
+    dbo_.commit(false);
+  }
+
+  public void cancel() throws IllegalArgumentException, SecurityException,
+      SQLException, IllegalAccessException, NoSuchFieldException,
+      ClassNotFoundException, InstantiationException {
+    /* Cancel children */
+    for (DboFormPanel<?> c : children_) {
+      c.cancel();
+    }
+
+    dbo_.retrieve();
+  }
+
+  public T getDatabaseObject() {
+    return dbo_;
+  }
+
+  public void setDatabaseObject(T dbo) {
+    dbo_ = dbo;
+    updateForm();
+  }
+
+  protected abstract void retrieveForm();
+
+  protected abstract void updateForm();
+
+  public void addFormItem(DboFormPanel<?> c) {
+    children_.add(c);
+    this.addFormItem("", c);
+  }
+
+  public void addFormItem(String text, Component c) {
+    if (read_only_)
+      c.setEnabled(false);
+    form_.addFormItem(text, c);
+  }
+}

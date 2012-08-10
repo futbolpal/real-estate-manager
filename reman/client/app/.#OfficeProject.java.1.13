@@ -1,0 +1,69 @@
+package reman.client.app;
+
+import java.util.ArrayList;
+
+import reman.client.app.finance.FinanceManager;
+import reman.client.app.office_maintenance.OfficeMaintenanceManager;
+import reman.client.basetypes.Listing;
+import reman.client.basetypes.Person;
+import reman.client.basetypes.RealEstateOffice;
+import reman.client.basetypes.Transaction;
+import reman.common.database.DatabaseObject;
+
+/**
+ * This class encapsulates ALL data in a project.  It acts as the root node
+ * for a retrieval.  
+ * @author jonathan
+ *
+ */
+public final class OfficeProject extends DatabaseObject {
+	private RealEstateOffice office_;
+	private String access_code_;
+	private FinanceManager finances_;
+	private ArrayList<Person> people_;
+	private ArrayList<Listing> listings_;
+	private ArrayList<Transaction> sold_listings_;
+	private OfficeMaintenanceManager maintenance_;
+
+	public OfficeProject() {
+		this("");
+	}
+
+	public OfficeProject(String code) {
+		this.access_code_ = code;
+		this.people_ = new ArrayList<Person>();
+		this.office_ = new RealEstateOffice();
+		this.finances_ = new FinanceManager();
+		this.maintenance_ = new OfficeMaintenanceManager();
+		this.listings_ = new ArrayList<Listing>();
+		this.sold_listings_ = new ArrayList<Transaction>();
+	}
+
+	public String getAccessCode() {
+		return access_code_;
+	}
+
+	public RealEstateOffice getOffice() {
+		return office_;
+	}
+
+	public FinanceManager getFinanceManager() {
+		return finances_;
+	}
+
+	public OfficeMaintenanceManager getOfficeMaintenanceManager() {
+		return maintenance_;
+	}
+
+	public ArrayList<Listing> getListings() {
+		return listings_;
+	}
+
+	public ArrayList<Transaction> getSoldListings() {
+		return sold_listings_;
+	}
+
+	public ArrayList<Person> getPeople() {
+		return people_;
+	}
+}

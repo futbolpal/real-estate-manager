@@ -1,0 +1,250 @@
+package reman.common.database;
+
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Date;
+
+import reman.client.app.Framework;
+import reman.client.app.OfficeProject;
+import reman.client.app.listeners.ClientStatusListener;
+import reman.common.ClientStatusMessage;
+import reman.common.ClientStatusMessage.UserStatus;
+import reman.common.database.exceptions.DatabaseException;
+import reman.common.database.exceptions.LoggedInException;
+
+public class UserManager extends DatabaseObject implements ClientStatusListener {
+
+	private static transient UserManager this_;
+
+	/*Database Fields*/
+	protected String username_;
+	protected String password_;
+	protected String display_name_;
+	protected long access_level_;
+	protected long access_group_;
+	protected OfficeProject office_project_;
+	protected UserStatus status_;
+	protected Timestamp last_;
+
+	/* Temporary Fields */
+	private transient long current_uid_;
+	private transient UserInfo current_info_;
+	private transient ArrayList<UserInfo> user_table_;
+
+	private UserManager() {
+		current_uid_ = -1;
+		user_table_ = new ArrayList<UserInfo>();
+	}
+
+	public boolean register(String username, String password, String display, String pcode,
+			boolean new_office) throws SQLException, IllegalArgumentException, IllegalAccessException,
+			ClassNotFoundException, SecurityException, NoSuchFieldException, LoggedInException {
+		/*Check the username */
+		String check_username = "SELECT * FROM " + this.getTableName() + " WHERE username_=MD5('"
+				+ username + "')";
+		ResultSet rs = DatabaseManager.executeQuery(check_username);
+		if (DatabaseManager.getRowCount(rs) != 0)
+			return false;
+
+		long pid = 0;
+		if (new_office) {
+			//create entry in officeprojectmanager
+			OfficeProjectManager.instance().registerProject(pcode);
+		} else {
+			//check project code
+			pid = OfficeProjectManager.instance().checkProjectCode(pcode);
+		}
+
+		if (pid < 0)
+			return false;
+
+		/*Register this user to that project*/
+		String register = "INSERT INTO " + this.getTableName()
+				+ " (username_,password_,display_name_,status_,office_project_) VALUES (MD5('" + username
+				+ "'),PASSWORD('" + username + password + "'),'" + display + "','"
+				+ UserStatus.LOGGED_OUT.name() + "'," + pid + ")";
+		DatabaseManager.executeUpdate(register);
+		return true;
+	}
+
+	public boolean login(String username, String password) throws SQLException, DatabaseException {
+
+		String sql = "SELECT * FROM " + this.getTableName() + " WHERE username_=MD5('" + username
+				+ "') AND password_=PASSWORD('" + username + password + "') AND status_='"
+				+ UserStatus.LOGGED_OUT.name() + "'";
+		ResultSet rs = DatabaseManager.executeQuery(sql);
+
+		if (DatabaseManager.getRowCount(rs) == 1) {
+			current_uid_ = rs.getLong("ID");
+			OfficeProject p = OfficeProjectManager.instance().getCurrentProject();
+			if (p != null) {
+				/*NEW PROJECT - Save project and update project id */
+				long pid = p.commit();
+				rs.updateLong("office_project_", pid);
+			} else {
+				/*LOAD PROJECT */
+				OfficeProjectManager.instance().loadProject(rs.getLong("office_project_"));
+			}
+
+			rs.updateString("status_", UserStatus.LOGGED_IN.name());
+			rs.updateTimestamp("last_", new Timestamp(new Date().getTime()));
+			rs.updateRow();
+			return true;
+		} else {
+			return false;
+		}
+	}
+
+	public void logout() throws SQLException {
+		String sql = "SELECT * FROM " + this.getTableName() + " WHERE ID=" + current_uid_;
+
+		ResultSet rs = DatabaseManager.executeQuery(sql);
+		if (DatabaseManager.getRowCount(rs) > 0) {
+			rs.updateString("status_", UserStatus.LOGGED_OUT.name());
+			rs.updateRow();
+		}
+
+		/* Reset variables */
+		this.current_uid_ = -1;
+		this.current_info_ = null;
+		this.user_table_ = null;
+	}
+
+	public void setChatServer(InetAddress i, int port) {
+		InetAddress[] ips;
+		try {
+			ips = InetAddress.getAllByName(i.getHostName());
+			for (InetAddress ip : ips) {
+				System.out.println(ip);
+			}
+		} catch (UnknownHostException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		/* update the table to include the address and port of the user for chat */
+	}
+
+	public void refreshUserTable() throws SQLException {
+		this.user_table_.clear();
+
+		String sql = "SELECT * FROM " + this.getTableName() + " WHERE status_<>'"
+				+ UserStatus.LOGGED_OUT.name() + "' AND office_project_="
+				+ OfficeProjectManager.instance().getCurrentProject().getID();
+		ResultSet rs = DatabaseManager.executeQuery(sql);
+
+		if (DatabaseManager.getRowCount(rs) > 0) {
+			do {
+				UserInfo ui = getUserInfo(rs.getLong("ID"));
+				if (ui != null) {
+					this.user_table_.add(getUserInfo(rs.getLong("ID")));
+				}
+			} while (rs.next());
+		}
+	}
+
+	public ArrayList<UserInfo> getUsersOnline() {
+		return this.user_table_;
+	}
+
+	public UserInfo getUserInfo(long uid) throws SQLException {
+
+		String sql = "SELECT * FROM " + this.getTableName() + " WHERE ID=" + uid;
+
+		ResultSet rs = DatabaseManager.executeQuery(sql);
+
+		if (DatabaseManager.getRowCount(rs) > 0) {
+			UserInfo ui = new UserInfo();
+			ui.id_ = rs.getLong("ID");
+			ui.access_group_ = rs.getLong("access_group_");
+			ui.access_level_ = rs.getLong("access_level_");
+			ui.last_ = rs.getTimestamp("last_");
+			ui.display_name_ = rs.getString("display_name_");
+			ui.status_ = UserStatus.valueOf(rs.getString("status_"));
+			return ui;
+		} else
+			return null;
+	}
+
+	public long getCurrentUserID() {
+		return current_uid_;
+	}
+
+	public UserInfo getCurrentUserInfo() throws SQLException {
+		if (current_info_ == null)
+			current_info_ = getUserInfo(current_uid_);
+		return current_info_;
+	}
+
+	public boolean isLoggedIn() {
+		return current_uid_ >= 0;
+	}
+
+	public void assertLoggedIn() throws LoggedInException {
+		if (!this.isLoggedIn())
+			throw new LoggedInException();
+	}
+
+	@Override
+	public long commit() {
+		System.err.println("Cannot commit this class to the database");
+		return -1;
+	}
+
+	@Override
+	public void retrieve() {
+		System.err.println("Cannot retreive this from the database");
+	}
+
+	public void clientStatusChanged(ClientStatusMessage m) {
+		try {
+			this.refreshUserTable();
+		} catch (SQLException e) {
+			e.printStackTrace();
+		}
+	}
+
+	public boolean isSingleton() {
+		return true;
+	}
+
+	public static UserManager instance() {
+		if (this_ == null) {
+			this_ = new UserManager();
+			Framework.instance().addClientStatusListener(this_);
+		}
+		return this_;
+
+	}
+
+	public final class UserInfo extends UserManager {
+		private Long id_;
+
+		public Long getAccessGroup() {
+			return this.access_group_;
+		}
+
+		public Long getAccessLevel() {
+			return this.access_level_;
+		}
+
+		public String getDisplayName() {
+			return this.display_name_;
+		}
+
+		public Timestamp getLastLogin() {
+			return this.last_;
+		}
+
+		public long getID() {
+			return this.id_;
+		}
+
+		public UserStatus getStatus() {
+			return this.status_;
+		}
+	}
+}

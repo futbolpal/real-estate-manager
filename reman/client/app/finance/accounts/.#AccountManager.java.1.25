@@ -1,0 +1,675 @@
+package reman.client.app.finance.accounts;
+
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.Enumeration;
+import java.util.Hashtable;
+import java.util.TreeSet;
+
+import reman.client.app.finance.FinanceManager;
+import reman.client.app.finance.TransactionType;
+import reman.client.app.finance.accounts.exceptions.InvalidAmountException;
+import reman.client.app.finance.accounts.exceptions.InvalidCategoryException;
+import reman.client.app.finance.accounts.exceptions.UnknownNodeException;
+import reman.client.app.finance.exceptions.FinanceException;
+import reman.client.app.finance.exceptions.NameAlreadyExistsException;
+import reman.client.app.finance.journals.Journal;
+import reman.client.app.finance.journals.JournalEntry;
+import reman.client.app.finance.journals.JournalEntryLineItem;
+import reman.client.app.finance.journals.exceptions.InvalidJournalEntryException;
+import reman.client.app.trees.MapTreeTraverseUtility;
+import reman.client.basetypes.IntegerRange;
+import reman.common.database.DatabaseObject;
+import reman.common.database.ManagedDatabaseObject;
+import reman.common.database.exceptions.DatabaseException;
+import reman.common.database.exceptions.LoggedInException;
+import reman.common.database.exceptions.NotPersistedException;
+
+/**
+ * To create a new account and manage existing accounts per office project. Accounts are keyed by their name.
+ * 
+ * @author Scott
+ *
+ */
+public class AccountManager extends ManagedDatabaseObject {
+
+	private static transient AccountManager this_;
+
+	/**
+	 * These are the root level accounts in the account tree, tree relations (parent, children) are maintained within each Account
+	 */
+	private Hashtable<String, Account> root_accounts_;
+
+	private AcctIdSystem id_system_;
+
+	private AccountManager() {
+		super(new String[] { "id_system_" });
+		root_accounts_ = new Hashtable<String, Account>();
+		id_system_ = new AcctIdSystem();
+	}
+
+	public static AccountManager instance() {
+		if (this_ == null)
+			this_ = new AccountManager();
+		return this_;
+	}
+
+	/**
+	 * Obtain the first matching result (breadth first search) that has the key of acct_name
+	 * @param acct_name
+	 * @return
+	 * @throws SQLException 
+	 * @throws DatabaseException 
+	 */
+	public Account getAccount(String acct_name) throws DatabaseException, SQLException {
+		this.retrieve();//ensure account map up to date
+
+		return (new MapTreeTraverseUtility<String, Account>()).getTargetNode(this.root_accounts_,
+				acct_name);
+	}
+
+	/**
+	 * Get all accounts where their types equal param 'type'. Indexed by account name
+	 * It is assumed that child AcctType can not differ from their parent acct types
+	 * 
+	 * @param type
+	 * @return 
+	 * @throws SQLException 
+	 * @throws DatabaseException 
+	 */
+	public Collection<Account> getExistingSubTypes(AcctType type) throws DatabaseException,
+			SQLException {
+		this.retrieve();//ensure account map up to date
+
+		/*TODO: can child AcctType vary from parent AcctType? assumed no...*/
+		ArrayList<Account> sub_types = new ArrayList<Account>();
+
+		Enumeration<Account> all_root_accts = this.root_accounts_.elements();
+		while (all_root_accts.hasMoreElements()) {
+			Account curr_root_acct = all_root_accts.nextElement();
+			if (curr_root_acct.getAcctType() == type)
+				sub_types.add(curr_root_acct);
+		}
+
+		return sub_types;
+	}
+
+	/**
+	 * Removes the account with the corresponding key from the map of accounts.  Only works when in initialization state.
+	 * @param acct_name
+	 * @return The account that was removed. 'null' if not account removed
+	 * @throws SQLException 
+	 * @throws DatabaseException 
+	 */
+	public Account removeAccount(String acct_name) throws SQLException, DatabaseException {
+		if (FinanceManager.instance().isInitilizationPhase()) {
+			this.retrieve();
+
+			Account removed_acct = null;
+			Account parent = null;
+			try {
+				if (this.lock()) {
+					removed_acct = (new MapTreeTraverseUtility<String, Account>()).getTargetNode(this
+							.getRootAccounts(), acct_name);
+
+					if (removed_acct != null) {
+						parent = removed_acct.getParent();
+						if (parent == null) {
+							this.root_accounts_.remove(removed_acct.getName());
+							this.commit();
+						} else if (parent.lock()) {
+							parent.removeChildAccount(removed_acct);
+							parent.commit();
+						}
+					}
+					/*keep id collections up to date*/
+					id_system_.unUseId(removed_acct.getAcctId());
+
+					this.commit();
+
+					FinanceManager.instance().getLedgerManager().removeLedger(removed_acct);
+
+					return removed_acct;
+				}
+			} catch (LoggedInException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+				throw e;
+			} catch (SQLException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+				throw e;
+			} catch (DatabaseException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+				throw e;
+			} finally {
+				if (parent != null)
+					parent.unlock();
+				this.unlock();
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * 
+	 * @param acct
+	 * @return
+	 * @throws DatabaseException 
+	 * @throws SQLException 
+	 */
+	public Account removeAccount(Account acct) throws SQLException, DatabaseException {
+		return this.removeAccount(acct.getName());
+	}
+
+	private Hashtable<String, Account> getRootAccounts() throws DatabaseException, SQLException {
+		this.retrieve();
+
+		return new Hashtable<String, Account>(this.root_accounts_);
+	}
+
+	/**
+	 * Incorporates 'acct' in the managed Account collection maintained by this AccountManager
+	 */
+	public Account registerAccount(Account acct) throws NameAlreadyExistsException,
+			DatabaseException, SQLException, IllegalArgumentException {
+		this.retrieve();
+
+		Account parent = null;
+		try {
+			if (this.lock()) {
+				if (this.isAccountRegistered(acct))
+					return acct;
+
+				if (id_system_.isAcctIdInUse(acct.getAcctId())) {
+					throw new FinanceException(acct, "Account id '" + acct.getAcctId()
+							+ "' is already in use.");
+				}
+				this.validateNewAccountInfo(acct.getName(), acct.getParent(), acct.getAcctType());
+
+				if (acct.lock()) {
+					if (acct.getParent() == null)
+						this.root_accounts_.put(acct.getName(), acct);
+					else {
+						/*also maintain the parent account, and synchronize with database*/
+						parent = acct.getParent();
+						if (parent.lock()) {
+							parent.addChildAccount(acct);
+							parent.commit();
+						}
+					}
+					acct.commit();
+				}
+				/*keep track of all ids currently in use*/
+				id_system_.useId(acct.getAcctId());
+
+				this.commit();
+
+				FinanceManager.instance().getLedgerManager().createLedger(acct);
+
+				return acct;
+			}
+		} catch (IllegalArgumentException e) {
+			throw e;
+		} catch (NameAlreadyExistsException e) {
+			throw e;
+		} catch (DatabaseException e) {
+			throw e;
+		} catch (SQLException e) {
+			throw e;
+		} finally {
+			if (parent != null)
+				parent.unlock();
+			acct.unlock();
+			this.unlock();
+		}
+		return null;
+	}
+
+	/**
+	 * Used to create an account within the current project. 'balance' will only be considered if the
+	 * program is in the initialization state with respect to finances. If the parent account is null then it is considered
+	 * a root account, and added to the root account map
+	 * 
+	 * @param acct_id Can be passed as 'null' if auto generation is desired.
+	 * @param name Name of the account. Key in hashtable of accounts (Must be unique with respect to other accounts).
+	 * @param balance Starting balance of the account.  Only relevant if program in initialization of finances state. Can be passed as 'null'.
+	 * @param parent_acct Parent type (if applicable) of this account.  Can be passed as 'null'.
+	 * @param a_type This account type.  If a 'parent_acct' is passed this much match the 'parent_acct' type
+	 * @param normal_balance What type of transaction increases this account.
+	 * @param t_scale
+	 * @return The account that was created and maintained within this AccountManager, null if failure to create.
+	 * @throws SQLException 
+	 * @throws FinanceException 
+	 * @throws UnknownNodeException
+	 * @throws DatabaseException 
+	 */
+	public Account createAccount(Integer acct_id, String name, Double balance, Account parent_acct,
+			AcctType a_type, TransactionType normal_balance, AcctTimeScale t_scale)
+			throws DatabaseException, SQLException {
+
+		this.retrieve();
+
+		Account acct = null;
+		if (acct_id == null)
+			acct_id = id_system_.getNextAcctId(a_type);
+		if (FinanceManager.instance().isInitilizationPhase() && balance != null)
+			acct = new Account(acct_id, name, parent_acct, a_type, balance, normal_balance, t_scale);
+		else
+			acct = new Account(acct_id, name, parent_acct, a_type, normal_balance, t_scale);
+
+		return this.registerAccount(acct);
+	}
+
+	/**
+	 * Used to create/register a temporary account. 'balance' will only be considered if the
+	 * program is in the initialization state with respect to finances.
+	 * @param acct_id Can be passed as 'null' if auto generation is desired.
+	 * @param name
+	 * @param balance
+	 * @param parent_acct
+	 * @param close_to_acct
+	 * @param a_type
+	 * @param normal_balance
+	 * @param close_to_category For automated temporary account closings. Must be valid with respect to close_to_accout at time of account closing (statement generation).
+	 * 								The category to associate the close_to_acct_ journal entry line item receiving this accounts balance
+	 * @param close_from_category For automated temporary account closings. Must be valid with respect to this account's categories at time of closing (statement generation).
+	 * 								The category associated with this accounts closing journal entry line item
+	 * @return The account that was created and maintained within this AccountManager, null if failure to create. 
+	 * @throws SQLException 
+	 * @throws DatabaseException 
+	 */
+	public TemporaryAccount createTempAccount(Integer acct_id, String name, Double balance,
+			Account parent_acct, Account close_to_acct, AcctType a_type, TransactionType normal_balance,
+			Journal close_to_journal, AcctActionCategory close_from_category,
+			AcctActionCategory close_to_category) throws NameAlreadyExistsException, FinanceException,
+			UnknownNodeException, DatabaseException, SQLException {
+
+		TemporaryAccount temp_acct = null;
+		if (acct_id == null)
+			acct_id = id_system_.getNextAcctId(a_type);
+
+		if (!this.isAccountRegistered(close_to_acct)) {
+			throw new IllegalArgumentException("close_to_acct must be maintained by this AccountManager.");
+		}
+
+		if (FinanceManager.instance().isInitilizationPhase() && balance != null)
+			temp_acct = new TemporaryAccount(acct_id, name, parent_acct, balance, close_to_acct, a_type,
+					normal_balance, close_to_journal, close_from_category, close_to_category);
+		else
+			temp_acct = new TemporaryAccount(acct_id, name, parent_acct, close_to_acct, a_type,
+					normal_balance, close_to_journal, close_from_category, close_to_category);
+
+		return (TemporaryAccount) this.registerAccount(temp_acct);
+	}
+
+	/**
+	 * If 'acct' is known about by this manager
+	 * @param acct
+	 * @return True if 'acct' is known about by this manager
+	 * @throws SQLException 
+	 * @throws DatabaseException 
+	 */
+	public boolean isAccountRegistered(Account acct) throws DatabaseException, SQLException {
+		Account managed_acct = (new MapTreeTraverseUtility<String, Account>()).getTargetNode(this
+				.getRootAccounts(), acct);
+		return managed_acct != null;
+	}
+
+	/**
+	 * Checks duplicate name, and that parent account exists, and account type doesn't differ from parent account
+	 * @param name
+	 * @param parent_acct
+	 * @param a_type
+	 * @throws IllegalArgumentException
+	 * @throws NameAlreadyExistsException
+	 * @throws FinanceException
+	 * @throws UnknownNodeException
+	 * @throws DatabaseException
+	 * @throws SQLException
+	 */
+	private void validateNewAccountInfo(String name, Account parent_acct, AcctType a_type)
+			throws IllegalArgumentException, NameAlreadyExistsException, FinanceException,
+			UnknownNodeException, DatabaseException, SQLException {
+		if (name == null || name.isEmpty())
+			throw new IllegalArgumentException("Name must not be null or empty.");
+
+		this.retrieve();
+
+		/*check for duplicate name, and that parent already exists in the list*/
+		Account maintained_duplicate_acct = (new MapTreeTraverseUtility<String, Account>())
+				.getTargetNode(this.root_accounts_, name);
+
+		if (maintained_duplicate_acct != null)
+			throw new NameAlreadyExistsException(maintained_duplicate_acct);
+
+		/*TODO: verify that sub accounts always have the same account type as parent type*/
+		if (parent_acct != null) {
+			if (parent_acct.getAcctType() != a_type)
+				throw new IllegalArgumentException("Parent account type '" + parent_acct.getAcctType()
+						+ "' must be equal to '" + a_type + "'.");
+			if (!this.isAccountRegistered(parent_acct)) {
+				throw new UnknownNodeException(parent_acct, "Parent account '" + parent_acct.getName()
+						+ "' must be maintained by this AccountManager.");
+			}
+		}
+	}
+
+	/**
+	 * @param temp_acct
+	 * @param close_from_category If the close_from account requires a category, a valid one must be provided
+	 * @param close_to_category If the close_to account requires a category, a valid one must be provided
+	 * @return
+	 * @throws SQLException 
+	 * @throws DatabaseException 
+	 */
+	public Integer closeAccount(TemporaryAccount temp_acct) throws InvalidJournalEntryException,
+			InvalidAmountException, InvalidCategoryException, UnknownNodeException, DatabaseException,
+			SQLException {
+		return this.closeAccount(temp_acct, temp_acct.getCloseToAccount(), temp_acct
+				.getCloseFromCategory(), temp_acct.getCloseToCategory(), temp_acct.getCloseToJournal());
+	}
+
+	/**
+	 * Close 'close_from' into 'close_to'. Both accounts must reside in the 'accounts_' list.
+	 * The resulting journal entry is recorded in the general journal.
+	 * 
+	 * @param close_from
+	 * @param close_to
+	 * @param record_result_to The journal where the resulting journal entry will be recorded to
+	 * @param close_from_category If the close_from account requires a category, a valid one must be provided
+	 * @param close_to_category If the close_to account requires a category, a valid one must be provided
+	 * @return True key of entry in 'record_result_to' journal if successful, null otherwise
+	 * @throws SQLException 
+	 * @throws DatabaseException 
+	 */
+	public Integer closeAccount(Account close_from, Account close_to,
+			AcctActionCategory close_from_category, AcctActionCategory close_to_category,
+			Journal record_result_to) throws InvalidJournalEntryException, InvalidAmountException,
+			InvalidCategoryException, UnknownNodeException, DatabaseException, SQLException {
+
+		this.retrieve();//ensure account map up to date
+
+		Integer entry_key = null;
+
+		if (!this.isAccountRegistered(close_from)) {
+			throw new UnknownNodeException(close_from, "The Account '" + close_from.getName()
+					+ "' is not known by the AccountManager.");
+		}
+		if (!this.isAccountRegistered(close_to)) {
+			throw new UnknownNodeException(close_to, "The Account '" + close_to.getName()
+					+ "' is not known by the AccountManager.");
+		}
+		if (record_result_to == null) {
+			throw new IllegalArgumentException("record_result_to can not be null.");
+		}
+
+		/*TODO: does an account need to be a 'TEMPORARY' account to close?*/
+		/*close_from_amount will zero the close_from account balance*/
+		JournalEntry je = new JournalEntry("Closing account '" + close_from.getName()
+				+ "' into account '" + close_to.getName() + "'.", null);
+		je.addLineItem(new JournalEntryLineItem(close_to, new AcctAmount(close_from.getBalanceSystem()
+				.getAcctAmount().getAmount(), close_from.getBalanceSystem().getAcctAmount()
+				.getTransactionType()), "Result of closing account '" + close_from.getName() + "'.",
+				close_to_category));
+		je.addLineItem(new JournalEntryLineItem(close_from, new AcctAmount(close_from
+				.getBalanceSystem().getAcctAmount().getAmount(), TransactionType.getOpposite(close_from
+				.getBalanceSystem().getAcctAmount().getTransactionType())), "Closing account '"
+				+ close_from.getName() + ".", close_from_category));
+
+		/*use current journal manager to record result*/
+		entry_key = FinanceManager.instance().getJournalManager().addJournalEntry(record_result_to, je);
+
+		return entry_key;
+	}
+
+	@Override
+	public void retrieve() throws DatabaseException, SQLException {
+		try {
+			super.retrieve();
+		} catch (NotPersistedException e) {
+			/*because this manager will automate a retrieve, disregard a not in database exception*/
+		}
+	}
+
+	/**
+	 * Regulates the unique id distribution amongst accounts.
+	 * Automation of account ids will reserve ids based on AcctType.
+	 * User can over ride automatic account id generation by creating an account object (outside manager) then register.
+	 * @author Scott
+	 *
+	 */
+	private class AcctIdSystem extends DatabaseObject {
+		public static final int ID_BREDTH = 20000;
+		public static final int START_ID = 10000;
+
+		/**
+		 * This collection maintains all account ids that are currently in use
+		 */
+		private TreeSet<IntegerRange> used_ids_;
+
+		/**
+		 * All account ids that are available to be assigned to Asset accounts
+		 */
+		private TreeSet<IntegerRange> asset_available_ids_;
+
+		/**
+		 * All account ids that are available to be assigned to Liability accounts
+		 */
+		private TreeSet<IntegerRange> liability_available_ids_;
+
+		/**
+		 * All account ids that are available to be assigned to Equity accounts
+		 */
+		private TreeSet<IntegerRange> equity_available_ids_;
+
+		public AcctIdSystem() {
+			asset_available_ids_ = initAvailableIds(START_ID, ID_BREDTH + START_ID);
+			liability_available_ids_ = initAvailableIds(ID_BREDTH + START_ID, 2 * ID_BREDTH + START_ID);
+			equity_available_ids_ = initAvailableIds(2 * ID_BREDTH + START_ID, 3 * ID_BREDTH + START_ID);
+			used_ids_ = new TreeSet<IntegerRange>(getAcctIdComparitor());
+		}
+
+		public boolean isAcctIdInUse(Integer acct_id) {
+			for (IntegerRange ir : this.used_ids_) {
+				if (ir.isInRange(acct_id))
+					return true;
+			}
+			return false;
+		}
+
+		/**
+		 * 
+		 * @param acct_id
+		 * @return The corresponding free set of ids, or null if id out of reserved range
+		 */
+		private TreeSet<IntegerRange> getReservedSet(int acct_id) {
+			if (acct_id >= START_ID && acct_id < ID_BREDTH + START_ID)
+				return asset_available_ids_;
+			else if (acct_id >= ID_BREDTH + START_ID && acct_id < 2 * ID_BREDTH + START_ID)
+				return liability_available_ids_;
+			else if (acct_id >= 2 * ID_BREDTH + START_ID && acct_id < 3 * ID_BREDTH + START_ID)
+				return equity_available_ids_;
+			return null;
+		}
+
+		public void useId(int acct_id) {
+			this.addIdToSet(acct_id, used_ids_);
+			TreeSet<IntegerRange> reserved_id_set = this.getReservedSet(acct_id);
+			if (reserved_id_set != null)
+				this.removeIdFromSet(acct_id, reserved_id_set);
+		}
+
+		public void unUseId(int acct_id) {
+			this.removeIdFromSet(acct_id, used_ids_);
+			TreeSet<IntegerRange> reserved_id_set = this.getReservedSet(acct_id);
+			if (reserved_id_set != null)
+				this.addIdToSet(acct_id, reserved_id_set);
+		}
+
+		/**
+		 * Removes 'acct_id' from 'set'
+		 * @param un_registered_acct
+		 */
+		private void removeIdFromSet(Integer acct_id, TreeSet<IntegerRange> set) {
+			if (set.isEmpty() || acct_id == null)
+				return;
+
+			IntegerRange remove_ir = null, lower_range = null, upper_range = null;
+			for (IntegerRange ir : set) {
+				if (ir.isInRange(acct_id)) {
+					remove_ir = ir;
+
+					Integer lower_bound = ir.getBegin();
+					Integer upper_bound = ir.getEnd();
+
+					if (ir.getBegin().equals(acct_id))
+						lower_bound = ir.getBegin() + 1;
+					if (ir.getEnd().equals(acct_id))
+						upper_bound = ir.getEnd() - 1;
+
+					if (lower_bound <= acct_id - 1)
+						lower_range = new IntegerRange(lower_bound, acct_id - 1);
+					if (upper_bound >= acct_id + 1)
+						upper_range = new IntegerRange(acct_id + 1, upper_bound);
+
+					break;
+				}
+			}
+
+			set.remove(remove_ir);
+			if (lower_range != null)
+				set.add(lower_range);
+			if (upper_range != null)
+				set.add(upper_range);
+
+			this.mergeSharedRanges(set);
+		}
+
+		private TreeSet<IntegerRange> getFreeKeySet(AcctType a_type) {
+			if (a_type == AcctType.ASSET)
+				return this.asset_available_ids_;
+			else if (a_type == AcctType.LIABILITY)
+				return this.liability_available_ids_;
+			else if (a_type == AcctType.EQUITY)
+				return this.equity_available_ids_;
+			return null;
+		}
+
+		/**
+		 * This will expire the account id
+		 * @param acct_id
+		 */
+		private void addIdToSet(Integer acct_id, TreeSet<IntegerRange> set) {
+
+			/*add a singleton range and allow merge to clean up*/
+			set.add(new IntegerRange(acct_id, acct_id));
+
+			/*clean up potential IntegerRanges which share bounds*/
+			this.mergeSharedRanges(set);
+		}
+
+		/**
+		 * Obtain lowest available id from the collection corresponding to 'a_type'.
+		 * If a free id can not be found from 'a_type', then the next free integer id (out side of reserved ids for each AcctType) is returned
+		 * @param a_type
+		 * @return
+		 */
+		public Integer getNextAcctId(AcctType a_type) {
+			Integer return_id = null;
+			IntegerRange return_range = null;
+			TreeSet<IntegerRange> return_q = this.getFreeKeySet(a_type);
+
+			if (!return_q.isEmpty()) {
+				/*obtain the first available id*/
+				return_range = return_q.first();
+				if (return_range != null) {
+					return_id = return_range.getBegin();
+					/*if the range is exhausted remove it, otherwise take the id found out of the range*/
+					if (return_range.getBegin() == return_range.getEnd())
+						return_q.remove(return_range);
+					else
+						return_range.setBegin(return_id + 1);
+				}
+			}
+
+			/*this is extreme case, if all available ids are used, then find an alternative integer to give*/
+			if (return_id == null) {
+				IntegerRange total_reserved_ids = new IntegerRange(START_ID, START_ID + 3 * ID_BREDTH);
+				Integer curr_id = new Integer(1);
+				for (IntegerRange ir : this.used_ids_) {
+					if (!ir.isInRange(curr_id)) {
+						/*if curr_id is a number in reserved AcctType id range, find alternate id*/
+						if (total_reserved_ids.isInRange(curr_id))
+							curr_id = total_reserved_ids.getEnd() + 1;
+						else
+							return curr_id;
+					} else
+						curr_id = new Integer(ir.getEnd() + 1);
+				}
+			}
+
+			return return_id;
+		}
+
+		/**
+		 * Merges adjacent IntegerRanges which share bounds
+		 * @param set
+		 */
+		private void mergeSharedRanges(TreeSet<IntegerRange> set) {
+			if (set.size() > 1) {
+				ArrayList<IntegerRange> cpy_set = null;
+				do {
+					/*since set is sorted, only need to traverse tree once to clean up overlapping ranges*/
+					cpy_set = new ArrayList<IntegerRange>(set);
+					for (int i = 0; i < set.size() - 1; i++) {
+						IntegerRange curr_range = cpy_set.get(i);
+						IntegerRange next_range = cpy_set.get(i + 1);
+
+						/*if two adjacent set boundaries intersect, merge the sets*/
+						if (next_range.getBegin().equals(curr_range.getEnd() + 1)
+								|| curr_range.isInRange(next_range)) {
+							Integer lowest_bound = (curr_range.getBegin() < next_range.getBegin()) ? curr_range
+									.getBegin() : next_range.getBegin();
+							Integer highest_bound = (curr_range.getEnd() > next_range.getEnd()) ? curr_range
+									.getEnd() : next_range.getEnd();
+							IntegerRange new_range = new IntegerRange(lowest_bound, highest_bound);
+							set.remove(curr_range);
+							set.remove(next_range);
+							set.add(new_range);
+						}
+					}
+				} while (cpy_set.size() != set.size());
+			}
+		}
+
+		/**
+		 * Ascending order by beginning integer value
+		 * @return
+		 */
+		private Comparator<IntegerRange> getAcctIdComparitor() {
+			return new Comparator<IntegerRange>() {
+				public int compare(IntegerRange o1, IntegerRange o2) {
+					return o1.getBegin() - o2.getBegin();
+				}
+			};
+		}
+
+		/**
+		 * Initialize key lists. Adds integers from begin to end to list.
+		 * @param begin
+		 * @param end
+		 * @param array
+		 */
+		private TreeSet<IntegerRange> initAvailableIds(int begin, int end) {
+			TreeSet<IntegerRange> array = new TreeSet<IntegerRange>(getAcctIdComparitor());
+			array.add(new IntegerRange(begin, end - 1));
+
+			return array;
+		}
+	}
+	
+}

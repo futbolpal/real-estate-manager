@@ -1,0 +1,150 @@
+package reman.client.app.finance.statements;
+
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.LinkedList;
+import java.util.Queue;
+
+import reman.client.app.finance.accounts.Account;
+import reman.client.app.finance.accounts.AcctActionCategory;
+import reman.client.app.finance.exceptions.FinanceException;
+import reman.common.database.exceptions.DatabaseException;
+
+import com.lowagie.text.pdf.PdfPTable;
+
+/**
+ * This class is intended to generate statements for a single Account, based use of AcctActionCategory objects contained within that Account.
+ * <br/>An example of the use of this class is the Cash Flow Statement, where the cash flow statement will report on the different categories of cash actions throughout the current year.
+ * The Contributions are maintained internally and depend on the Account. The Contributions tree will mirror the AcctActionCategory tree in the Account.
+ * @author Scott
+ *
+ */
+public class CategoryStatement extends Statement {
+	/**
+	 * This will be the account with categories used for statement generation
+	 */
+	private Account acct_;
+
+	/**
+	 * DatabaseObject use only
+	 */
+	private CategoryStatement() {
+	}
+
+	/**
+	 * This constructor will automatically build a Statement which mirrors the tree structure contained in <code>account_with_categories</code>.
+	 * @param statement_name
+	 * @param account_with_categories Account for that contains AcctActionCategory objects and this statement will report on.
+	 */
+	public CategoryStatement(String statement_name, Account account_with_categories,
+			Timestamp end_time) {
+		super(statement_name, account_with_categories.getBalanceSystem().getNormalBalance(), end_time);
+		this.acct_ = account_with_categories;
+		buildContributionTree();
+	}
+
+	private void buildContributionTree() {
+		for (AcctActionCategory root_cat : this.acct_.getRootActionCategories().values()) {
+			try {
+				buildContributionTree(root_cat, null);
+			} catch (FinanceException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			} catch (DatabaseException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			} catch (SQLException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+	}
+
+	private void buildContributionTree(AcctActionCategory root_category,
+			CategoryStatementContribution root_con) throws FinanceException, DatabaseException,
+			SQLException {
+		/*if the current category has children, make a contribution for it
+		 * else add current category as line item to current contribution*/
+		if (root_category.isLeafNode()) {
+			root_con.addLineItem(new CategoryStatementLineItem(root_category));
+			return;
+		} else {
+			CategoryStatementContribution child_con = new CategoryStatementContribution(root_category,
+					root_con);
+			super.addContribution(child_con);
+			for (AcctActionCategory child_cat : root_category.getChildren().values()) {
+				buildContributionTree(child_cat, child_con);
+			}
+		}
+	}
+
+	private void buildRootContribution() {
+		/*generate a contribution tree that mirrors the category tree*/
+		for (AcctActionCategory curr_root_category : this.acct_.getRootActionCategories().values()) {
+			CategoryStatementContribution curr_root_contribution = new CategoryStatementContribution(
+					curr_root_category, null);
+			this.buildRootContribution(curr_root_category, curr_root_contribution);
+		}
+	}
+
+	/**
+	 * Breadth first way of copying <code>root_category</code> tree to equivalent tree with <code>root_contribution</code> as root node
+	 * @param root_category
+	 * @param root_contribution
+	 */
+	private void buildRootContribution(AcctActionCategory root_category,
+			CategoryStatementContribution root_contribution) {
+		Queue<AcctActionCategory> category_q = new LinkedList<AcctActionCategory>();
+		Queue<CategoryStatementContribution> contribution_q = new LinkedList<CategoryStatementContribution>();
+		category_q.add(root_category);
+		contribution_q.add(root_contribution);
+
+		while (category_q.size() > 0) {
+			AcctActionCategory curr_category = category_q.poll();
+			CategoryStatementContribution curr_contribution = contribution_q.poll();
+
+			try {
+				super.addContribution(curr_contribution);
+			} catch (FinanceException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			} catch (DatabaseException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			} catch (SQLException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+
+			/*for each category child, create a category statement contribution*/
+			/*append all the children to bfs queue to check*/
+			for (AcctActionCategory curr_child_category : curr_category.getChildren().values()) {
+				CategoryStatementContribution curr_child_contribution = new CategoryStatementContribution(
+						curr_child_category, curr_contribution);
+				category_q.add(curr_child_category);
+				contribution_q.add(curr_child_contribution);
+			}
+		}
+	}
+
+	/**
+	 * StatementContributions are automatically generated by this class.  The contributions are a result of the AcctActionCategory objects within the Account this CategoryStatement refers to.
+	 * @return false
+	 */
+	@Override
+	public boolean addContribution(StatementContribution section) {
+		return false;
+	}
+
+	@Override
+	protected float[] getColumnWidths() {
+		final float[] column_widths = { 30f, 40f, 15f, 15f };
+		return column_widths;
+	}
+	
+	@Override
+	protected String[] getColumnNames() {
+		final String[] column_names = { "Category Name", "Description", "Debit", "Credit" };
+		return column_names;
+	}
+}

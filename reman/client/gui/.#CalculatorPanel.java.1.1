@@ -1,0 +1,66 @@
+package reman.client.gui;
+
+import java.awt.BorderLayout;
+import java.awt.Dimension;
+import java.awt.GridLayout;
+
+import javax.swing.JButton;
+import javax.swing.JPanel;
+import javax.swing.JTextField;
+
+public class CalculatorPanel extends JPanel {
+  public CalculatorPanel() {
+    JTextField screen = new JTextField();
+    screen.setPreferredSize(new Dimension(-1, 40));
+    screen.setFont(screen.getFont().deriveFont(16f));
+    screen.setEditable(false);
+
+    JPanel pad = new JPanel(new GridLayout(5, 4));
+
+    JButton num_0 = new JButton("0");
+    JButton num_1 = new JButton("1");
+    JButton num_2 = new JButton("2");
+    JButton num_3 = new JButton("3");
+    JButton num_4 = new JButton("4");
+    JButton num_5 = new JButton("5");
+    JButton num_6 = new JButton("6");
+    JButton num_7 = new JButton("7");
+    JButton num_8 = new JButton("8");
+    JButton num_9 = new JButton("9");
+    JButton bksp = new JButton("Bksp");
+    JButton ce = new JButton("CE");
+    JButton clr = new JButton("Clr");
+    JButton pos_neg = new JButton("\u0241");
+    JButton div = new JButton("/");
+    JButton mul = new JButton("X");
+    JButton add = new JButton("+");
+    JButton min = new JButton("-");
+    JButton dec = new JButton(".");
+    JButton eql = new JButton("=");
+
+    pad.add(bksp);
+    pad.add(ce);
+    pad.add(clr);
+    pad.add(pos_neg);
+    pad.add(num_7);
+    pad.add(num_8);
+    pad.add(num_9);
+    pad.add(div);
+    pad.add(num_4);
+    pad.add(num_5);
+    pad.add(num_6);
+    pad.add(mul);
+    pad.add(num_1);
+    pad.add(num_2);
+    pad.add(num_3);
+    pad.add(min);
+    pad.add(num_0);
+    pad.add(dec);
+    pad.add(eql);
+    pad.add(add);
+
+    this.setLayout(new BorderLayout());
+    this.add(screen, BorderLayout.NORTH);
+    this.add(pad, BorderLayout.CENTER);
+  }
+}

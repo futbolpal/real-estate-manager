@@ -1,0 +1,58 @@
+package reman.client.gui;
+
+import java.awt.BorderLayout;
+import java.awt.Component;
+
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JTabbedPane;
+import javax.swing.UIManager;
+import javax.swing.UnsupportedLookAndFeelException;
+import javax.swing.border.EmptyBorder;
+
+import reman.client.gui.schedule.SchedulePanel;
+import reman.client.gui.ui.VerticalLabelUI;
+
+public class FrameworkWindow extends JFrame {
+  private FrameworkMenuBar menu_;
+  private FrameworkStatusBar status_;
+  private JTabbedPane main_tabs_;
+
+  public FrameworkWindow() {
+    this.setLayout(new BorderLayout());
+    this.setJMenuBar(menu_ = new FrameworkMenuBar());
+    this.add(status_ = new FrameworkStatusBar(), BorderLayout.SOUTH);
+    this.add(main_tabs_ = new JTabbedPane() {
+      public void addTab(String s, Component c) {
+	super.addTab(s, c);
+	JLabel vlabel = new JLabel(s);
+	vlabel.setBorder(new EmptyBorder(3, 3, 3, 3));
+	vlabel.setUI(new VerticalLabelUI(false));
+	this.setTabComponentAt(this.getTabCount() - 1, vlabel);
+      }
+    }, BorderLayout.CENTER);
+    main_tabs_.setTabPlacement(JTabbedPane.LEFT);
+    main_tabs_.addTab("Office", new JPanel());
+    main_tabs_.addTab("Schedule", new SchedulePanel());
+
+    this.setSize(1000, 1000);
+    this.setExtendedState(MAXIMIZED_BOTH);
+    this.setVisible(true);
+  }
+
+  public FrameworkStatusBar getFrameworkStatusBar() {
+    return status_;
+  }
+
+  public JTabbedPane getMainTabs() {
+    return main_tabs_;
+  }
+
+  public static void main(String[] args) throws ClassNotFoundException,
+      InstantiationException, IllegalAccessException,
+      UnsupportedLookAndFeelException {
+    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+    new FrameworkWindow();
+  }
+}

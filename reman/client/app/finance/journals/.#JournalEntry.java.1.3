@@ -1,0 +1,230 @@
+package reman.client.app.finance.journals;
+
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.Collections;
+import java.util.Date;
+import java.util.Hashtable;
+import java.util.Vector;
+
+import reman.client.app.finance.TransactionType;
+import reman.client.app.finance.accounts.exceptions.InvalidAmountException;
+import reman.client.app.finance.journals.exceptions.InternalJournalEntryException;
+import reman.client.app.finance.journals.exceptions.InvalidJournalEntryException;
+import reman.common.database.LimitedCommitDatabaseObject;
+import reman.common.database.exceptions.LockedException;
+
+/**
+ * Consisting of JournalEntryLineItems, this class will ensure a valid JournalEnry
+ * upon invoking commit()
+ * @author Scott
+ *
+ */
+public class JournalEntry extends LimitedCommitDatabaseObject {
+
+	/**
+	 * When this journal entry actually occurred
+	 */
+	private Timestamp occurred_ts_;
+
+	/**
+	 * true when this JournalEntry has been successfully validated
+	 * and applied
+	 */
+	private boolean is_valid_;
+
+	/**
+	 * store each line item with associated key for reference later
+	 */
+	private Hashtable<Integer, JournalEntryLineItem> line_items_;
+
+	/**
+	 * For DatabaseObject use only
+	 */
+	private JournalEntry() {
+		this("Empty Constructor", new Timestamp(new Date().getTime()));
+	}
+
+	/**
+	 * 
+	 * @param desciprtion
+	 * @param occurred When the journal entry actually occurred in business world. If null it is taken as now.
+	 */
+	public JournalEntry(String desciprtion, Timestamp occurred) {
+		super(1);//read only is 1 commit allowed
+		super.description_ = desciprtion;
+		this.occurred_ts_ = (occurred == null) ? new Timestamp(new Date().getTime())
+				: occurred;
+		this.line_items_ = new Hashtable<Integer, JournalEntryLineItem>();
+		this.is_valid_ = false;
+	}
+
+	/**
+	 * 
+	 * @param jeli
+	 * @return Null if key already exists. Other wise the id in the hash table where the line item was placed
+	 */
+	public Integer addLineItem(JournalEntryLineItem jeli) {
+		Integer key = this.getNextKey();
+		if (this.line_items_.containsKey(key))
+			return null;
+
+		this.line_items_.put(key, jeli);
+		return key;
+	}
+
+	/**
+	 * 
+	 * @param key
+	 * @return the value to which the key had been mapped in this hashtable, or null if the key did not have a mapping
+	 */
+	public JournalEntryLineItem removeLineItem(Long key) {
+		return this.line_items_.remove(key);
+	}
+
+	private Integer getNextKey() {
+		return this.line_items_.size() + 1;
+	}
+
+	/**
+	 * Checks that all conditions of this JournalENtry are valid and applies
+	 * line items to respective accounts if valid
+	 * 
+	 * @return True if valid journal entry and amounts have been applied to respective accounts
+	 * @throws InternalJournalEntryException 
+	 * @throws InvalidJournalEntryException 
+	 */
+	public void validate() throws InternalJournalEntryException,
+			InvalidJournalEntryException {
+		/*check the following conditions:
+		 * 1) no line item can make its respective account balance negative
+		 * 2) credit column sum must equal debit column sum
+		 * 3) (Asset = Liability + Equity) must hold (consider contra accounts)*/
+
+		/*TODO: need to lock all objects before operating on them, and release before return*/
+		/*if previously validated and applied, return true*/
+		if (this.isValid())
+			return;
+
+		/*keep a running sum of amounts seen*/
+		double debit_normal_balance_amt_ = 0, credit_normal_balance_amt_ = 0;
+		double credit_amt_ = 0, debit_amt_ = 0;
+
+		/*this will hold all the keys of journal entry line items whos amounts have successfully been applied*/
+		Vector<Integer> line_item_keys_applied = new Vector<Integer>();
+
+		/*parse the journal entries in order*/
+		Vector<Integer> all_keys = new Vector<Integer>(this.line_items_.keySet());
+		Collections.sort(all_keys);
+		for (Integer curr_key : all_keys) {
+			JournalEntryLineItem curr_item = this.line_items_.get(curr_key);
+
+			try {
+				curr_item.applyAmount();
+			} catch (InvalidAmountException ex) {
+				/*curr_item failed to be applied, all that were applied before it will need to be undone*/
+				applyInverseAmountsToKeys(line_item_keys_applied);
+				throw new InvalidJournalEntryException(
+						"Jouranl Entry Line Item with key '" + curr_key + "' (account='"
+								+ curr_item.getAccount() + "' amount='" + curr_item.getAmount()
+								+ "') has made the account balance negative.");
+			}
+			/*the amount was successfully applied*/
+			line_item_keys_applied.add(curr_key);
+
+			/*track the total high level normal balance amount (credit normal/debit normal)*/
+			if (curr_item.getAccount().getNormalBalance() == TransactionType.CREDIT) {
+				if (curr_item.getAccount().getNormalBalance() == curr_item.getAmount()
+						.getTransactionType())
+					credit_normal_balance_amt_ += curr_item.getAmount().getAmount();
+				else
+					credit_normal_balance_amt_ -= curr_item.getAmount().getAmount();
+			} else {
+				if (curr_item.getAccount().getNormalBalance() == curr_item.getAmount()
+						.getTransactionType())
+					debit_normal_balance_amt_ += curr_item.getAmount().getAmount();
+				else
+					debit_normal_balance_amt_ -= curr_item.getAmount().getAmount();
+			}
+
+			/*track the transaction amount(credit,debit)*/
+			if (curr_item.getAmount().getTransactionType() == TransactionType.CREDIT)
+				credit_amt_ += curr_item.getAmount().getAmount();
+			else
+				debit_amt_ += curr_item.getAmount().getAmount();
+		}
+
+		/*NOTE: Sum of debit normal balance account line items = Sum of credit normal balance account line items*/
+		/*			same as Asset = Liabilities + Equity*/
+		if (debit_normal_balance_amt_ != credit_normal_balance_amt_) {
+			applyInverseAmountsToKeys(line_item_keys_applied);
+			throw new InvalidJournalEntryException(
+					"(Asset=Libilities+Owners equity) equation not satisfied.  Using (debit normal balance amount != credit normal balance amount) implementation.");
+		}
+		if (credit_amt_ != debit_amt_) {
+			applyInverseAmountsToKeys(line_item_keys_applied);
+			throw new InvalidJournalEntryException(
+					"Total credit column must equat total debit column condition not satisfied");
+		}
+
+		/*all checks passed*/
+		this.is_valid_ = true;
+	}
+
+	/**
+	 * Will invoke the applyInverseAmount for each line item key in the 'keys' parameter
+	 * @param keys
+	 * @throws InternalJournalEntryException
+	 */
+	private void applyInverseAmountsToKeys(Vector<Integer> keys)
+			throws InternalJournalEntryException {
+		for (Integer line_item_key : keys) {
+			try {
+				this.line_items_.get(line_item_key).applyInverseAmount();
+			} catch (InvalidAmountException internal_ex) {
+				/*this is an internal error*/
+				throw new InternalJournalEntryException(
+						"The inverse amount opperation on line item '"
+								+ this.line_items_.get(line_item_key) + "' threw the follow '"
+								+ internal_ex + "'.");
+			}
+		}
+	}
+
+	/**
+	 * Commits if not already exists in the database.
+	 * Will validate entry and commit to database if not already in database
+	 * @throws LockedException 
+	 * @throws InvalidJournalEntryException 
+	 * @throws InternalJournalEntryException 
+	 * @throws InvalidJournalEntryException 
+	 * @throws InternalJournalEntryException 
+	 * @throws InvalidJournalEntryException 
+	 * @throws InternalJournalEntryException 
+	 */
+	@Override
+	public long commit() throws IllegalArgumentException, SQLException,
+			IllegalAccessException, ClassNotFoundException, LockedException {
+
+		/*check valid constraints, and apply amounts*/
+		/*TODO: THROW exception*/
+		try {
+			this.validate();
+		} catch (InternalJournalEntryException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (InvalidJournalEntryException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		return super.commit();
+	}
+
+	/**
+	 * @return True if this JournalEntry has been validated & commited
+	 */
+	public boolean isValid() {
+		return this.is_valid_;
+	}
+}

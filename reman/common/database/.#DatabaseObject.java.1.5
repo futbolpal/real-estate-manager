@@ -1,0 +1,592 @@
+package reman.common.database;
+
+import java.lang.reflect.Field;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Date;
+import java.util.Map;
+
+import reman.client.app.Framework;
+import reman.client.gui.forms.DboFormPanel;
+import reman.common.DboChangedMessage;
+import reman.common.database.UserManager.UserInfo;
+
+public abstract class DatabaseObject {
+  private transient long id_;
+  private transient boolean broadcast_changes_;
+  private int version_;
+  private long modifier_id_;
+  private Timestamp modified_last_;
+  protected String name_;
+  protected String description_;
+
+  public DatabaseObject() {
+    /* Test generic */
+    if (this.getClass().getTypeParameters().length > 0) {
+      try {
+	throw new Exception("DatabaseObject cannot use generics");
+      } catch (Exception e) {
+	e.printStackTrace();
+	System.exit(1);
+      }
+    }
+    id_ = -1;
+    version_ = 0;
+    broadcast_changes_ = true;
+    DatabaseManager.registerClass(this.getClass());
+  }
+
+  public UserInfo getLastModifier() throws SQLException {
+    return UserManager.instance().getUserInfo(modifier_id_);
+  }
+
+  public Timestamp getLastModified() {
+    return modified_last_;
+  }
+
+  public boolean isChangeBroadcasted() {
+    return broadcast_changes_;
+  }
+
+  public void setChangeBroadCasted(boolean f) {
+    this.broadcast_changes_ = f;
+  }
+
+  public long getID() {
+    return id_;
+  }
+
+  protected void setID(long id) {
+    id_ = id;
+  }
+
+  public String getName() {
+    return name_;
+  }
+
+  public void setName(String name) {
+    name_ = name;
+  }
+
+  public String getDescription() {
+    return description_;
+  }
+
+  public void setDescription(String desc) {
+    description_ = desc;
+  }
+
+  private long commitError(Object o) {
+    System.out.println("Error committing object: " + o.toString());
+    return -1;
+  }
+
+  public String getTableName() {
+    return DatabaseManager.getTableName(this.getClass());
+  }
+
+  public boolean existsInDatabase() {
+    return !(id_ < 0);
+  }
+
+  public DboFormPanel<? extends DatabaseObject> getFormPanel(String name,
+      DboFormPanel<? extends DatabaseObject> parent, boolean read_only)
+      throws Exception {
+    return null;
+  }
+
+  public String toString() {
+    return this.name_;
+  }
+
+  /**
+   * 
+   * @throws SQLException
+   * @throws IllegalArgumentException
+   * @throws IllegalAccessException
+   * @throws SecurityException
+   * @throws NoSuchFieldException
+   * @throws ClassNotFoundException
+   * @throws InstantiationException 
+   */
+  public void retrieve() throws SQLException, IllegalArgumentException,
+      IllegalAccessException, SecurityException, NoSuchFieldException,
+      ClassNotFoundException, InstantiationException {
+    if (!UserManager.instance().isLoggedIn()) {
+      System.err.println("Not logged in");
+      return;
+    }
+    if (id_ < 0) {
+      System.err.println("Error");
+      return;
+    }
+
+    // load parent info and lock
+    retrieve(this.getClass(), id_);
+  }
+
+  /**
+   * @param c
+   * @param this_id
+   * @throws SQLException
+   * @throws IllegalArgumentException
+   * @throws IllegalAccessException
+   * @throws SecurityException
+   * @throws NoSuchFieldException
+   * @throws ClassNotFoundException
+   * @throws InstantiationException 
+   */
+  private void retrieve(Class c, long this_id) throws SQLException,
+      IllegalArgumentException, IllegalAccessException, SecurityException,
+      NoSuchFieldException, ClassNotFoundException, InstantiationException {
+
+    String sql = "SELECT * FROM " + DatabaseManager.getTableName(c)
+	+ " WHERE ID=" + this_id;
+    Statement stmt = DatabaseManager.getStatement();
+    System.out.println(sql);
+    ResultSet rs = stmt.executeQuery(sql);
+
+    long parent_id = -1;
+    // get info from resultset
+    if (DatabaseManager.getRowCount(rs) == 1) {
+      rs.first();
+      Field[] fields = c.getDeclaredFields();
+      for (Field f : fields) {
+	/*if the field is marked transient, then skip it*/
+	if (!DatabaseManager.isPersisted(f))
+	  continue;
+	/* Allow access */
+	f.setAccessible(true);
+
+	if (DatabaseManager.isCollection(f.getType())) {
+	  // collection
+	  System.out.println(f);
+	  Collection coll = (Collection) f.getType().newInstance();
+
+	  /* Populate Collection */
+
+	  // get the name of the collection table
+	  // list_[collectiontype]
+	  Class list_type = DatabaseManager.getGenericClasses(f)[0];
+	  String list_table = DatabaseManager.getTableName(f);
+
+	  // select all entries in the collection table WHERE CLASS =
+	  // c.getSimpleType() AND OID = this.id_
+	  String query = "SELECT * FROM " + list_table + " WHERE CLASS='"
+	      + DatabaseManager.getTableName(c) + "' AND OID=" + this.id_
+	      + " AND FIELD='" + f.getName() + "'";
+	  System.out.println(query);
+	  Statement list_stmt = DatabaseManager.getStatement();
+	  ResultSet list_rs = list_stmt.executeQuery(query);
+	  System.out.println("Rows retrieved: "
+	      + DatabaseManager.getRowCount(list_rs));
+	  // extract data fields from result set:
+	  if (DatabaseManager.getRowCount(list_rs) > 0) {
+	    do {
+	      Object data = list_rs.getObject("DATA");
+	      System.out.println(data);
+	      if (DatabaseManager.isSQLType(list_type)) {
+		coll.add(data);
+	      } else {
+		// build the complex object and add it to the
+		try {
+		  DatabaseObject list_item = (DatabaseObject) list_type
+		      .newInstance();
+		  list_item.setID((Long) data);
+		  list_item.retrieve();
+		  coll.add(list_item);
+		} catch (InstantiationException e) {
+		  System.err.println(list_type
+		      + " must have default constructor");
+		}
+	      }
+	    } while (list_rs.next());
+	  }
+	  f.set(this, coll);
+	} else if (DatabaseManager.isMap(f.getType())) {
+	  /* Map type */
+	  Map map = (Map) f.get(this);
+	  map.clear();
+
+	  // get the name of the map table: map_[key class]_[value
+	  // class]
+	  Class[] types = DatabaseManager.getGenericClasses(f);
+	  Class keyType = types[0];
+	  Class valueType = types[1];
+	  String mapTable = DatabaseManager.getTableName(f);
+
+	  // select all the entries in the mapTable WHERE CLASS =
+	  // c.getSimpleName() AND OID = this.id_
+	  String query = "SELECT * FROM " + mapTable + " WHERE CLASS='"
+	      + DatabaseManager.getTableName(c) + "' AND OID=" + this.id_
+	      + " AND FIELD='" + f.getName() + "'";
+	  Statement map_stmt = DatabaseManager.getStatement();
+	  ResultSet map_rs = map_stmt.executeQuery(query);
+
+	  // extract key and value fields from result set
+	  if (map_rs.first()) {
+	    do {
+	      Object key = map_rs.getObject("KEY");
+	      Object value = map_rs.getObject("VALUE");
+	      DatabaseObject keyItem = null;
+	      DatabaseObject valueItem = null;
+	      /*if the key type is complex then build it from the db*/
+	      if (!DatabaseManager.isSQLType(keyType)) {
+		try {
+		  keyItem = (DatabaseObject) keyType.newInstance();
+		  keyItem.getClass().getField("id_").set(keyItem, key);
+		  keyItem.retrieve();
+		} catch (InstantiationException e) {
+		  System.err
+		      .println(keyType + " must have default constructor");
+		}
+	      }
+	      /*if the value type is complex then build from the db*/
+	      if (!DatabaseManager.isSQLType(valueType)) {
+		try {
+		  valueItem = (DatabaseObject) valueType.newInstance();
+		  valueItem.getClass().getField("id_").set(valueItem, value);
+		  valueItem.retrieve();
+		} catch (InstantiationException e) {
+		  System.err.println(valueType
+		      + " must have default constructor");
+		}
+
+	      }
+
+	      /*if a complex key or value was encountered then use the complex object
+	       *else use the simple object*/
+	      map.put(((keyItem == null) ? key : keyItem),
+		  ((valueItem == null) ? value : valueItem));
+
+	    } while (map_rs.next());
+	  }
+	} else {
+	  int cidx = rs.findColumn(f.getName());
+	  if (cidx < 0) {
+	    System.err.println("Couldn't find column for field " + f.getName());
+	    continue;
+	  }
+	  Object data = rs.getObject(cidx);
+
+	  if (DatabaseManager.isEnum(f.getType())) {
+	    Object[] constants = f.getType().getEnumConstants();
+	    for (Object o : constants) {
+	      Enum e = (Enum) o;
+	      if (e.name().equalsIgnoreCase(data.toString())) {
+		f.set(this, e);
+		break;
+	      }
+	    }
+	  } else if (DatabaseManager.isSQLType(f.getType())) {
+	    System.out.println(f + "<--" + data);
+	    f.set(this, data);
+	  } else {
+	    // complex type
+	    DatabaseObject t = (DatabaseObject) f.get(this);
+	    if (t != null) {
+	      t.retrieve();
+	      //TODO: do we need this?  f.set(this, t);
+	    }
+	  }
+	}
+      }
+      parent_id = rs.getLong("PID");
+    } else {
+      System.err.println("Incorrect fetch size");
+    }
+
+    /* Get parent info */
+    Class parent = c.getSuperclass();
+    if (parent != null && !parent.equals(Object.class)) {
+      retrieve(parent, parent_id);
+    }
+  }
+
+  /**
+   * Returns the primary key of the stored object
+   * 
+   * @throws SQLException
+   * @throws IllegalArgumentException
+   * @throws IllegalAccessException
+   * @throws ClassNotFoundException
+   */
+  public long commit(boolean recursive) throws SQLException,
+      IllegalArgumentException, IllegalAccessException, ClassNotFoundException {
+
+    if (!UserManager.instance().isLoggedIn()) {
+      System.err.println("Not logged in");
+      return -1;
+    }
+
+    boolean locked = LockManager.instance().isLocked(this, recursive);
+    if (locked) {
+      System.out.println(this.getClass() + ":" + this.id_ + " is locked");
+      return -1;
+    }
+
+    System.out.println("Committing type " + this.getClass());
+
+    // update the last modified date
+    this.modified_last_ = new Timestamp(new Date().getTime());
+
+    // update the version
+    this.version_++;
+
+    // update modifier
+    this.modifier_id_ = UserManager.instance().getCurrentUserID();
+
+    // do the commit
+    this.id_ = commit(this.getClass(), recursive);
+
+    // notify server
+    if (id_ >= 0 && broadcast_changes_) {
+      Framework.instance().sendMessage(
+	  new DboChangedMessage(this.getClass(), this.getID()));
+    }
+
+    return this.id_;
+  }
+
+  private long commit(Class c, boolean recursive) throws SQLException,
+      IllegalArgumentException, IllegalAccessException, ClassNotFoundException {
+    long pid = -1;
+    if (!c.getSuperclass().equals(Object.class)) {
+      pid = commit(c.getSuperclass(), recursive);
+    }
+
+    /** Perform save of "this class" **/
+    pid = commit(c, pid, recursive);
+
+    return pid;/* the ID column for this class */
+  }
+
+  /**
+   * 
+   * @param c
+   * @param parent_id
+   * @return
+   * @throws IllegalArgumentException
+   * @throws IllegalAccessException
+   * @throws SQLException
+   * @throws ClassNotFoundException
+   */
+  private long commit(Class c, long parent_id, boolean recursive)
+      throws IllegalArgumentException, IllegalAccessException, SQLException,
+      ClassNotFoundException {
+    System.err.println("Parent id: " + parent_id);
+    String columns = new String();
+    String values = new String();
+    String update = new String();
+    Field[] fields = c.getDeclaredFields();
+    ArrayList<Field> collection_fields = new ArrayList<Field>();
+    ArrayList<Field> map_fields = new ArrayList<Field>();
+    for (Field f : fields) {
+
+      if (!DatabaseManager.isPersisted(f))
+	continue;
+
+      f.setAccessible(true);
+      Object field_val = f.get(this);
+      if (field_val == null)
+	continue;
+
+      /* Delegate complex and collections objects */
+      if (!DatabaseManager.isSQLType(f.getType())) {
+	if (DatabaseManager.isCollection(f.getType())) {
+	  collection_fields.add(f);
+	  continue;
+	} else if (DatabaseManager.isMap(f.getType())) {
+	  map_fields.add(f);
+	  continue;
+	} else if (DatabaseManager.isDatabaseObject(f.getType())) {
+	  if (recursive) {
+	    /* TODO: do we want to commit associative databaseobjects?
+	     * This is related to the question:
+	     *  do we want to lock associative databaseobjects
+	     */
+	    // we commit the object and save its primary key to
+	    // store in the column
+	    long fkey = ((DatabaseObject) field_val).commit(true);
+	    if (fkey < 0) {
+	      return commitError(field_val);
+	    }
+	    field_val = fkey;
+	  } else {
+	    continue;
+	  }
+	} else {
+	  /*TODO: what do we do here?*/
+	  //probably skip
+	  continue;
+	}
+      }
+
+      /* Construct strings */
+      columns += "," + f.getName();
+      if (f.getType().isPrimitive()) {
+	values += "," + field_val;
+	update += "" + f.getName() + "=" + field_val + ",";
+      } else {
+	values += ",'" + field_val + "'";
+	update += "" + f.getName() + "='" + field_val + "',";
+      }
+    }
+
+    long prim_key = this.id_;
+    /* Commit 'this' object data to the database */
+    Statement statement = DatabaseManager.getStatement();
+    String sql;
+    if (this.existsInDatabase() && update.length() > 0) {
+      sql = "UPDATE " + DatabaseManager.getTableName(c) + " SET " + update;
+      sql = sql.substring(0, sql.length() - 1);
+      if (parent_id < 0)
+	sql += " WHERE ID=" + this.getID();
+      else
+	sql += " WHERE PID=" + parent_id;
+    } else {
+      sql = "INSERT INTO " + DatabaseManager.getTableName(c) + " (ID,PID"
+	  + columns + ") values(DEFAULT," + parent_id + values + ")";
+    }
+    System.out.println(sql);
+    statement.executeUpdate(sql);
+
+    if (!this.existsInDatabase()) {
+      ResultSet rs = statement.getGeneratedKeys();
+      rs.first();
+      prim_key = rs.getLong(1);
+    }
+
+    long retval;
+    retval = commitCollection(prim_key, collection_fields);
+    if (retval < 0) {
+      return retval;
+    }
+
+    retval = commitMap(prim_key, map_fields);
+    if (retval < 0) {
+      return retval;
+    }
+
+    return prim_key;
+  }
+
+  private long commitCollection(long owner_id,
+      ArrayList<Field> collection_fields) throws SQLException,
+      IllegalArgumentException, IllegalAccessException, ClassNotFoundException {
+
+    Statement statement = DatabaseManager.getStatement();
+    /* We can now commit the list fields */
+    /* pkey = OID = 'this' id*/
+    for (Field f : collection_fields) {
+      Collection<?> coll = (Collection<?>) f.get(this);
+
+      if (coll == null)
+	continue;
+      String table_name = DatabaseManager.getTableName(f);
+
+      /*TODO:fix - Delete original list*/
+      String delete = "DELETE FROM " + table_name + " WHERE CLASS='"
+	  + this.getTableName() + "' AND FIELD='" + f.getName() + "' AND OID="
+	  + owner_id;
+      System.out.println(delete);
+      statement.executeUpdate(delete);
+
+      statement.clearBatch();
+      for (Object o : coll) {
+	Class collection_type = o.getClass();
+	String batch;
+	if (DatabaseManager.isSQLType(collection_type)) {
+	  batch = "INSERT INTO " + table_name + " values(DEFAULT," + owner_id
+	      + ",'" + this.getTableName() + "','" + f.getName() + "','" + o
+	      + "');";
+	} else {
+	  DatabaseObject dbo = (DatabaseObject) o;
+	  long item_pkey = dbo.commit(false);//TODO: should this be recursive or not?
+	  System.out.println("Committed List Item: " + item_pkey + " of type "
+	      + dbo + " from field: + " + f);
+	  if (item_pkey < 0) {
+	    return commitError(dbo);
+	  }
+	  batch = "INSERT INTO " + table_name + " values(DEFAULT," + owner_id
+	      + ",'" + this.getTableName() + "','" + f.getName() + "',"
+	      + item_pkey + ");";
+	}
+	System.out.println(batch);
+	statement.addBatch(batch);
+      }
+      statement.executeBatch();
+    }
+    statement.close();
+    return 0;
+  }
+
+  private long commitMap(long oid, ArrayList<Field> map_fields)
+      throws SQLException, IllegalArgumentException, IllegalAccessException,
+      ClassNotFoundException {
+    Statement statement = DatabaseManager.getStatement();
+    /* now commit the map fields */
+    /* pkey = OID*/
+    for (Field f : map_fields) {
+      Map<?, ?> map = (Map<?, ?>) f.get(this);
+
+      /*Delete original map*/
+      Class[] maptypes = DatabaseManager.getGenericClasses(f);
+      Class keyClass = maptypes[0];
+      Class valueClass = maptypes[1];
+      String tableName = DatabaseManager.getTableName(f);
+
+      /*TODO: fix algorithm*/
+      String delete = "DELETE FROM " + tableName + " WHERE CLASS='"
+	  + this.getTableName() + "' AND FIELD='" + f.getName() + "' AND OID="
+	  + oid;
+      System.out.println(delete);
+      statement.executeUpdate(delete);
+
+      statement.clearBatch();
+      for (Map.Entry<?, ?> entry : map.entrySet()) {
+	Long key_pkey = null;
+	Long value_pkey = null;
+
+	/* If the key is a complex type, delegate commit to obtain key */
+	if (!DatabaseManager.isSQLType(keyClass)) {
+	  DatabaseObject dbo = (DatabaseObject) entry.getKey();
+	  key_pkey = dbo.commit(false);//TODO: should this be recursive or not?
+	}
+	/* If the value is a complex type, delegate commit to obtain key */
+	if (!DatabaseManager.isSQLType(valueClass)) {
+	  DatabaseObject dbo = (DatabaseObject) entry.getValue();
+	  value_pkey = dbo.commit(false);//TODO: should this be recursive or not?
+	}
+	if (key_pkey < 0 || value_pkey < 0) {
+	  return commitError(entry);
+	}
+
+	/*if a complex key or value exists then enter the fkey for the entry
+	 *else enter the object value*/
+	String sqlBatchEntry = "INSERT INTO "
+	    + tableName
+	    + " values(DEFAULT, "
+	    + oid
+	    + ",'"
+	    + this.getTableName()
+	    + "','"
+	    + f.getName()
+	    + "',"
+	    + ((key_pkey == null) ? entry.getKey() : key_pkey.longValue())
+	    + ","
+	    + ((value_pkey == null) ? entry.getValue() : value_pkey.longValue())
+	    + ");";
+	System.out.println(sqlBatchEntry);
+	statement.addBatch(sqlBatchEntry);
+      }
+      statement.executeBatch();
+    }
+    statement.close();
+    return 0;
+  }
+}

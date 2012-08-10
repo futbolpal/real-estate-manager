@@ -1,0 +1,125 @@
+package reman.client.gui.statusbar;
+
+import java.awt.Color;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.sql.SQLException;
+import java.util.ArrayList;
+
+import javax.swing.ImageIcon;
+import javax.swing.JLabel;
+import javax.swing.JPopupMenu;
+
+import reman.client.app.Framework;
+import reman.client.app.listeners.ClientStatusListener;
+import reman.client.gui.AnimationListener;
+import reman.client.gui.BorderFadeAnimation;
+import reman.common.ClientStatusMessage;
+import reman.common.database.UserManager;
+import reman.common.database.UserManager.UserInfo;
+
+public class CoworkersOnlinePanel extends JLabel implements
+    ClientStatusListener, AnimationListener {
+  private int users_online_;
+  private ClientStatusDetailsPopup popup_;
+  private BorderFadeAnimation animation_timer_;
+
+  public CoworkersOnlinePanel() {
+    ImageIcon user_icon = new ImageIcon(this.getClass().getResource(
+	"system-users.png"));
+    this.setIcon(user_icon);
+    this.addMouseListener(new MouseAdapter() {
+      public void mouseClicked(MouseEvent e) {
+	if (popup_ == null)
+	  popup_ = new ClientStatusDetailsPopup();
+	popup_.show();
+      }
+    });
+    Framework.instance().addClientStatusListener(this);
+    this.clientStatusChanged(null);
+
+    try {
+      animation_timer_ = new BorderFadeAnimation(this, null);
+    } catch (Exception e1) {
+    }
+  }
+
+  public synchronized void clientStatusChanged(ClientStatusMessage m) {
+    if (m == null) {
+      try {
+	UserManager.instance().refreshUserTable();
+      } catch (SQLException e) {
+	e.printStackTrace();
+      }
+      ArrayList<UserInfo> users = UserManager.instance().getUsersOnline();
+      this.users_online_ = users.size();
+    } else {
+      Color c = null;
+      switch (m.getUserStatus()) {
+      case LOGGED_IN:
+	this.users_online_++;
+	c = Color.GREEN;
+	break;
+      case LOGGED_OUT:
+	this.users_online_--;
+	c = Color.RED;
+	break;
+      }
+      animation_timer_.setStartColor(c);
+      animation_timer_.start();
+    }
+
+    /* Exclude me from the online user count */
+    this.setText("Co-workers online: (" + (users_online_ - 1) + ")");
+  }
+
+  public void animationDone() {
+
+  }
+
+  private class ClientStatusDetailsPopup extends JPopupMenu {
+    public ClientStatusDetailsPopup() {
+    }
+
+    public void show() {
+      this.removeAll();
+
+      JLabel header = new JLabel("Co-workers Online");
+      header.setOpaque(true);
+      header.setBackground(Color.darkGray);
+      header.setForeground(Color.white);
+      this.add(header);
+
+      /* Add items for each user */
+      ArrayList<UserInfo> users = UserManager.instance().getUsersOnline();
+      for (UserInfo u : users) {
+	if (u.getID() == UserManager.instance().getCurrentUserID())
+	  continue;
+
+	JLabel u_lbl = new JLabel(u.getDisplayName());
+
+	/* Set icon */
+	switch (u.getStatus()) {
+	case LOGGED_IN:
+	  break;
+	case IDLE:
+	  u_lbl.setText("<html><i>" + u_lbl.getText() + "</i></html>");
+	  u_lbl.setForeground(Color.DARK_GRAY);
+	  break;
+	}
+
+	u_lbl.addMouseListener(new MouseAdapter() {
+	  public void mouseClicked(MouseEvent e) {
+	    /*TODO:  Add chat support here */
+
+	  }
+	});
+	this.add(u_lbl);
+      }
+
+      int height = (int) this.getPreferredSize().getHeight();
+      super.show(CoworkersOnlinePanel.this, 0, -height);
+    }
+
+  }
+}

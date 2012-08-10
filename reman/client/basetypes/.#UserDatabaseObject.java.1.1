@@ -1,0 +1,46 @@
+package reman.client.basetypes;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+
+import reman.common.database.DatabaseManager;
+import reman.common.database.DatabaseObject;
+import reman.common.database.UserManager;
+
+public abstract class UserDatabaseObject extends DatabaseObject {
+  private long user_id_;
+
+  public UserDatabaseObject() {
+    user_id_ = UserManager.instance().getCurrentUserID();
+    this.setChangeBroadCasted(false);
+  }
+
+  public static ArrayList<? extends UserDatabaseObject> load(
+      Class<? extends UserDatabaseObject> type) throws InstantiationException,
+      IllegalAccessException, SQLException, IllegalArgumentException,
+      SecurityException, NoSuchFieldException, ClassNotFoundException {
+    if (!DatabaseManager.isDatabaseObject(type))
+      return null;
+
+    /* Ensure database is prepared for this type */
+    type.newInstance();
+
+    /* Retrieve object IDs for load */
+    ArrayList<UserDatabaseObject> ret = new ArrayList<UserDatabaseObject>();
+    String sql = "SELECT ID FROM " + DatabaseManager.getTableName(type);
+    ResultSet rs = DatabaseManager.getStatement().executeQuery(sql);
+    if (DatabaseManager.getRowCount(rs) > 0) {
+      do {
+	long id = rs.getLong(1);
+	UserDatabaseObject o = (UserDatabaseObject) type.newInstance();
+	o.setID(id);
+	o.retrieve();
+	if (o.user_id_ == UserManager.instance().getCurrentUserID())
+	  ret.add(o);
+      } while (rs.next());
+    }
+    return ret;
+  }
+
+}

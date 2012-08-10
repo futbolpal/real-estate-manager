@@ -1,0 +1,88 @@
+/*Conventions:
+id:
+1* is asset
+2* is liability
+3* is equity
+
+temporary accounts:
+contain a <closeTo> tag with the id of the account it will close to
+if a parent account has a <closeTo> and the child does not, it inherently has a <closeTo> with its parent's id
+
+
+*/
+
+<Accounts>
+	<Account id="10001">
+		<name>Cash</name>
+		<type>Asset</type>
+		<normalBalance>Debit</normalBalance>
+		<timeScale>Short</timeScale>
+		
+	</Account>
+	
+	<Account id="30002">
+		<name>Income Summary</name>
+		<type>Equity</type>
+		<normalBalance>Debit</normalBalance>
+		<timeScale>NA</timeScale>
+		<closeTo>30003</closeTo>
+	</Account>
+	
+	<Account id="30003">
+		<name>Net Income</name>
+		<type>Equity</type>
+		<normalBalance>Credit</normalBalance>
+		<timeScale>NA</timeScale>
+		<closeTo>10001</closeTo>
+	</Account>
+	
+	
+	<Account id="30006">
+		<name>Expense</name>
+		<type>Equity</type>
+		<normalBalance>Debit</normalBalance>
+		<timeScale>NA</timeScale>
+		<closeTo>30002</closeTo>
+		
+		<Account id="30004">
+			<name>Income Tax</name>
+			<type>Equity</type>
+			<normalBalance>Debit</normalBalance>
+			<timeScale>NA</timeScale>
+			<closeTo>30006</closeTo>
+		</Account>
+	</Account>
+	
+	<Account id="30005">
+		<name>Revenue</name>
+		<type>Equity</type>
+		<normalBalance>Credit</normalBalance>
+		<timeScale>NA</timeScale>
+		<closeTo>30002</closeTo>
+		<Account>
+			<name>Purchases</name>
+			<type>Equity</type>
+			<normalBalance>Debit</normalBalance>
+			<timeScale>NA</timeScale>
+			<closeTo>30005</closeTo>
+			
+			<Account>
+				<name>Purchases Returns and Allowances</name>
+				<type>Equity</type>
+				<normalBalance>Credit</normalBalance>
+				<timeScale>NA</timeScale>
+				<closeTo>30005</closeTo>
+			</Account>
+		</Account>
+	</Account>
+	
+	
+	
+	
+	<Account id="">
+		<name></name>
+		<type></type>
+		<normalBalance></normalBalance>
+		<timeScale></timeScale>
+	</Account>
+</Accounts>

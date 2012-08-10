@@ -1,0 +1,191 @@
+package reman.client.app;
+
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+import java.sql.SQLException;
+import java.util.ArrayList;
+
+import javax.swing.UIManager;
+import javax.swing.UnsupportedLookAndFeelException;
+
+import reman.client.app.chatter.ChatMessage;
+import reman.client.app.listeners.ChatMessageListener;
+import reman.client.app.listeners.ClientStatusListener;
+import reman.client.app.listeners.DboChangedListener;
+import reman.client.gui.FrameworkWindow;
+import reman.client.gui.LoginDialog;
+import reman.common.database.OfficeProjectManager;
+import reman.common.database.UserManager;
+import reman.common.messaging.ClientStatusMessage;
+import reman.common.messaging.DboChangedMessage;
+import reman.common.messaging.MessageManager;
+import reman.common.messaging.NotificationMessage;
+import reman.common.messaging.ProjectNotificationMessage;
+import reman.common.messaging.ClientStatusMessage.UserStatus;
+
+/**
+ * This is the entry point for the application.  It starts by displaying a login for the users.
+ * Next, the JMS messaging system is initiated.  Lastly, the window is created.  The framework
+ * acts as a hub to distribute messages to registered listeners.  
+ * @author jonathan
+ *
+ */
+public class Framework {
+	private static Framework this_;
+
+	private FrameworkWindow window_;
+
+	private ArrayList<ClientStatusListener> client_status_listeners_;
+	private ArrayList<DboChangedListener> dbo_changed_listeners_;
+	private ArrayList<ChatMessageListener> chat_message_listeners_;
+
+	private Framework() {
+		client_status_listeners_ = new ArrayList<ClientStatusListener>();
+		dbo_changed_listeners_ = new ArrayList<DboChangedListener>();
+		chat_message_listeners_ = new ArrayList<ChatMessageListener>();
+	}
+
+	/**
+	 * Launches the initialization procedure for the framework.  
+	 * <ol>
+	 * 	<li>Launch login dialog</li>
+	 * 	<li>Initialize JMS Messaging System</li>
+	 * 	<li>Create framework window</li>
+	 * @throws SQLException
+	 */
+	private void start() throws SQLException {
+		new Thread(new Runnable() {
+			public void run() {
+				MessageManager.instance();
+			}
+		}).start();
+		LoginDialog.login();
+
+		MessageManager.instance().send(new ClientStatusMessage(UserStatus.LOGGED_IN));
+		MessageManager.instance().registerListeners();
+
+		/* Create window*/
+		window_ = new FrameworkWindow();
+		window_.build(null);
+		window_.setTitle("Welcome, " + UserManager.instance().getCurrentUserInfo().getDisplayName());
+		window_.addWindowListener(new WindowAdapter() {
+			public void windowClosing(WindowEvent ev) {
+				Framework.instance().close();
+			}
+		});
+	}
+
+	/**
+	 * When a message is received from the JMS system, the message is pushed to 
+	 * the appropriate listeners.
+	 * @param m
+	 */
+	public void distributeMessage(NotificationMessage m) {
+		if (m instanceof ProjectNotificationMessage) {
+			ProjectNotificationMessage pm = (ProjectNotificationMessage) m;
+			if (pm.getProjectID() != OfficeProjectManager.instance().getCurrentProject().getID())
+				return;
+
+			if (pm instanceof ClientStatusMessage) {
+				synchronized (client_status_listeners_) {
+					//distribute to client listeners
+					for (ClientStatusListener c : this.client_status_listeners_) {
+						c.clientStatusChanged((ClientStatusMessage) m);
+					}
+				}
+			} else if (pm instanceof DboChangedMessage) {
+				synchronized (dbo_changed_listeners_) {
+					for (DboChangedListener d : this.dbo_changed_listeners_) {
+						d.dboChangedEvent((DboChangedMessage) m);
+					}
+				}
+			}
+		}
+	}
+
+	public void distributeMesssage(ChatMessage m) {
+		synchronized (chat_message_listeners_) {
+			for (ChatMessageListener l : chat_message_listeners_)
+				l.chatMessageReceived(m);
+		}
+	}
+
+	/**
+	 * Adds a listener to listen for change in client status'
+	 * @param c
+	 */
+	public synchronized void addClientStatusListener(ClientStatusListener c) {
+		System.out.println(this.client_status_listeners_.size());
+		this.client_status_listeners_.add(c);
+	}
+
+	/**
+	 * Removes a client status listener
+	 * @param c
+	 */
+	public synchronized void removeClientStatusListener(ClientStatusListener c) {
+		this.client_status_listeners_.remove(c);
+	}
+
+	/**
+	 * Adds a listener to listen to changes to database objects.
+	 * @param d
+	 */
+	public synchronized void addDboChangedListener(DboChangedListener d) {
+		this.dbo_changed_listeners_.add(d);
+	}
+
+	/**
+	 * Removes a DBO changed listener 
+	 * @param d
+	 */
+	public synchronized void removeDboChangedListener(DboChangedListener d) {
+		this.dbo_changed_listeners_.remove(d);
+	}
+
+	public synchronized void addChatMessageListener(ChatMessageListener c) {
+		this.chat_message_listeners_.add(c);
+	}
+
+	public synchronized void removeChatMessageListener(ChatMessageListener c) {
+		this.chat_message_listeners_.remove(c);
+	}
+
+	/**
+	 * @return FrameworkWindow - the main application window
+	 */
+	public FrameworkWindow getWindow() {
+		return window_;
+	}
+
+	public void setStatus(String text) {
+		window_.setStatus(text);
+	}
+
+	/**
+	 * Launches the close procedure for the Framework 
+	 */
+	public void close() {
+		try {
+			UserManager.instance().logout();
+			MessageManager.instance().stopListeners();
+			MessageManager.instance().send(new ClientStatusMessage(UserStatus.LOGGED_OUT));
+			MessageManager.instance().close();
+			System.exit(0);
+		} catch (SQLException e) {
+			e.printStackTrace();
+		}
+	}
+
+	public static Framework instance() {
+		if (this_ == null)
+			this_ = new Framework();
+		return this_;
+	}
+
+	public static void main(String[] args) throws ClassNotFoundException, InstantiationException,
+			IllegalAccessException, UnsupportedLookAndFeelException, SQLException {
+		UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+		Framework.instance().start();
+	}
+}

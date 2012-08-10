@@ -1,0 +1,202 @@
+package reman.client.gui;
+
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.GridLayout;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Locale;
+
+import javax.swing.ImageIcon;
+import javax.swing.JButton;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.SwingConstants;
+import javax.swing.border.TitledBorder;
+
+public class CalendarPanel extends JPanel {
+  private Calendar today_;
+  private Calendar date_;
+  private JLabel curr_month_;
+  private JLabel curr_year_;
+  private JPanel curr_grid_;
+  private DayLabel selected_day_;
+
+  private ArrayList<CalendarPanelListener> listeners_;
+
+  public CalendarPanel() {
+    this(new Timestamp(System.currentTimeMillis()));
+    listeners_ = new ArrayList<CalendarPanelListener>();
+  }
+
+  public CalendarPanel(Timestamp t) {
+    today_ = Calendar.getInstance();
+    today_.setTimeInMillis(System.currentTimeMillis());
+    date_ = Calendar.getInstance();
+    date_.setTimeInMillis(t.getTime());
+    curr_month_ = new JLabel(date_.getDisplayName(Calendar.MONTH,
+	Calendar.LONG, Locale.US));
+    curr_year_ = new JLabel(date_.get(Calendar.YEAR) + "");
+
+    this.setLayout(new BorderLayout());
+
+    JPanel monthselect = new JPanel();
+    monthselect.setLayout(new BorderLayout());
+    JButton prev_month = new JButton(new ImageIcon(this.getClass().getResource(
+	"go-previous.png")));
+    prev_month.setBorderPainted(false);
+    prev_month.setFocusPainted(false);
+    prev_month.addActionListener(new ActionListener() {
+      public void actionPerformed(ActionEvent e) {
+	date_.add(Calendar.MONTH, -1);
+	dateChanged();
+      }
+    });
+    JButton next_month = new JButton(new ImageIcon(this.getClass().getResource(
+	"go-next.png")));
+    next_month.setBorderPainted(false);
+    next_month.setFocusPainted(false);
+    next_month.addActionListener(new ActionListener() {
+      public void actionPerformed(ActionEvent e) {
+	date_.add(Calendar.MONTH, 1);
+	dateChanged();
+      }
+    });
+    monthselect.add(prev_month, BorderLayout.WEST);
+    monthselect.add(curr_month_, BorderLayout.CENTER);
+    monthselect.add(next_month, BorderLayout.EAST);
+
+    JPanel yearselect = new JPanel();
+    yearselect.setLayout(new BorderLayout());
+    JButton prev_year = new JButton(new ImageIcon(this.getClass().getResource(
+	"go-previous.png")));
+    prev_year.setBorderPainted(false);
+    prev_year.setFocusPainted(false);
+    prev_year.addActionListener(new ActionListener() {
+      public void actionPerformed(ActionEvent e) {
+	date_.add(Calendar.YEAR, -1);
+	dateChanged();
+      }
+    });
+    JButton next_year = new JButton(new ImageIcon(this.getClass().getResource(
+	"go-next.png")));
+    next_year.setBorderPainted(false);
+    next_year.setFocusPainted(false);
+    next_year.addActionListener(new ActionListener() {
+      public void actionPerformed(ActionEvent e) {
+	date_.add(Calendar.YEAR, 1);
+	dateChanged();
+      }
+    });
+    yearselect.add(prev_year, BorderLayout.WEST);
+    yearselect.add(curr_year_, BorderLayout.CENTER);
+    yearselect.add(next_year, BorderLayout.EAST);
+
+    JPanel selectpanel = new JPanel();
+    selectpanel.setLayout(new BorderLayout());
+    selectpanel.add(monthselect, BorderLayout.WEST);
+    selectpanel.add(yearselect, BorderLayout.EAST);
+    this.add(selectpanel, BorderLayout.NORTH);
+
+    curr_grid_ = new JPanel(new GridLayout(0, 7));
+    fillGrid();
+    this.add(curr_grid_, BorderLayout.CENTER);
+  }
+
+  private void dateChanged() {
+    curr_month_.setText(date_.getDisplayName(Calendar.MONTH, Calendar.LONG,
+	Locale.US));
+    curr_year_.setText(date_.get(Calendar.YEAR) + "");
+    fillGrid();
+  }
+
+  private void fillGrid() {
+    this.remove(curr_grid_);
+    curr_grid_.removeAll();
+
+    Calendar d = Calendar.getInstance();
+    d.set(Calendar.MONTH, date_.get(Calendar.MONTH));
+    d.set(Calendar.YEAR, date_.get(Calendar.YEAR));
+    d.set(Calendar.DAY_OF_MONTH, 1);
+
+    /* Put week days in first row */
+    curr_grid_.add(new JLabel("<html><b><u>Sun</u></b></html>"));
+    curr_grid_.add(new JLabel("<html><b><u>Mon</u></b></html>"));
+    curr_grid_.add(new JLabel("<html><b><u>Tue</u></b></html>"));
+    curr_grid_.add(new JLabel("<html><b><u>Wed</u></b></html>"));
+    curr_grid_.add(new JLabel("<html><b><u>Thu</u></b></html>"));
+    curr_grid_.add(new JLabel("<html><b><u>Fri</u></b></html>"));
+    curr_grid_.add(new JLabel("<html><b><u>Sat</u></b></html>"));
+
+    int dow = d.get(Calendar.DAY_OF_WEEK);
+    for (int i = 0; i < dow - 1; i++)
+      curr_grid_.add(new JLabel());
+
+    while (d.get(Calendar.MONTH) == date_.get(Calendar.MONTH)) {
+      JLabel day = new DayLabel(d);
+      curr_grid_.add(day);
+      d.add(Calendar.DAY_OF_MONTH, 1);
+    }
+
+    this.add(curr_grid_, BorderLayout.CENTER);
+    this.repaint();
+  }
+
+  private void fireDateChanged() {
+    for (CalendarPanelListener l : listeners_) {
+      l.dateChangedEvent(date_);
+    }
+  }
+
+  public void addListener(CalendarPanelListener l) {
+    listeners_.add(l);
+  }
+
+  public Timestamp getSelectedDate() {
+    return new Timestamp(date_.getTimeInMillis());
+  }
+
+  private class DayLabel extends JLabel {
+    private Color primary_;
+    private Color selected_;
+
+    public DayLabel(final Calendar date) {
+      final int day = date.get(Calendar.DAY_OF_MONTH);
+      primary_ = this.getBackground();
+      selected_ = Color.DARK_GRAY;
+      this.setBorder(new TitledBorder(String.valueOf(day)));
+      this.setOpaque(false);
+      this.setVerticalAlignment(SwingConstants.TOP);
+      this.setVerticalTextPosition(SwingConstants.TOP);
+      this.addMouseListener(new MouseAdapter() {
+	public void mouseClicked(MouseEvent e) {
+	  if (selected_day_ != null) {
+	    selected_day_.setBackground(selected_day_.primary_);
+	  }
+	  DayLabel.this.setBackground(selected_);
+	  selected_day_ = DayLabel.this;
+	  date_.set(Calendar.DAY_OF_MONTH, day);
+	  fireDateChanged();
+	}
+      });
+      if (date.get(Calendar.DAY_OF_YEAR) == today_.get(Calendar.DAY_OF_YEAR)) {
+	primary_ = Color.CYAN;
+	this.setBackground(Color.CYAN);
+      }
+    }
+  }
+
+  public static void main(String[] args) {
+    JFrame f = new JFrame();
+    f.add(new CalendarPanel());
+    f.pack();
+    f.setVisible(true);
+
+  }
+}

@@ -1,0 +1,67 @@
+package reman.client.gui.forms;
+
+import javax.swing.JComboBox;
+import javax.swing.JSpinner;
+import javax.swing.JTextField;
+import javax.swing.SpinnerNumberModel;
+
+import reman.client.app.office_maintenance.Task;
+import reman.client.app.office_maintenance.TaskCategory;
+import reman.client.app.office_maintenance.Task.TaskPriority;
+import reman.client.gui.DateField;
+import reman.common.database.DatabaseObject;
+
+public class TaskFormPanel extends DboFormPanel<Task> {
+	private JTextField name_;
+	private JTextField desc_;
+	private JSpinner percent_done_;
+	private DateField due_date_;
+	private JComboBox priority_;
+	private JComboBox category_;
+
+	public TaskFormPanel(String name, Task a, DboFormPanel<? extends DatabaseObject> parent,
+			boolean read_only) throws Exception {
+		super(name, a, parent, false);
+
+		name_ = new JTextField(20);
+		desc_ = new JTextField(20);
+		percent_done_ = new JSpinner(new SpinnerNumberModel(0, 0, 100, 5));
+		due_date_ = new DateField();
+		priority_ = new JComboBox(TaskPriority.values());
+		category_ = new JComboBox();
+		this.addFormItem("Name", name_);
+		this.addFormItem("Description", desc_);
+		this.addFormItem("Category", category_);
+		this.addFormItem("Percent Complete", percent_done_);
+		this.addFormItem("Due Date", due_date_);
+		this.addFormItem("Priority", priority_);
+		this.updateForm();
+	}
+
+	protected void retrieveForm() {
+		Task t = dbo_;
+		t.setName(name_.getText());
+		t.setDescription(desc_.getText());
+		t.setDueDate(due_date_.getDate());
+		t.setPercentComplete((Integer) percent_done_.getValue());
+		t.setPriority((TaskPriority) priority_.getSelectedItem());
+		t.setCategory((TaskCategory) category_.getSelectedItem());
+	}
+
+	protected void updateForm() {
+		Task t = dbo_;
+		if (t.getName() != null)
+			name_.setText(t.getName());
+		if (t.getDescription() != null)
+			desc_.setText(t.getDescription());
+		if (t.getDueDate() != null)
+			due_date_.setDate(t.getDueDate());
+		if (t.getPriority() != null)
+			priority_.setSelectedItem(t.getPriority());
+		if (t.getCategory() != null)
+			category_.setSelectedItem(t.getCategory());
+		percent_done_.setValue(t.getPercentComplete());
+
+	}
+
+}

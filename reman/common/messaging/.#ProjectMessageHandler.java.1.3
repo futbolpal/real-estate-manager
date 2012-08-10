@@ -1,0 +1,33 @@
+package reman.common.messaging;
+
+import javax.jms.Message;
+import javax.jms.MessageListener;
+import javax.jms.ObjectMessage;
+import javax.jms.JMSException;
+
+import reman.client.app.Framework;
+import reman.common.database.UserManager;
+
+public class ProjectMessageHandler implements MessageListener {
+
+	public void onMessage(Message message) {
+		System.out.println("received message");
+		if (message instanceof ObjectMessage) {
+			try {
+				Object o = ((ObjectMessage) message).getObject();
+				if (o instanceof NotificationMessage) {
+					//don't display to the user that logged in
+					if (o instanceof ClientStatusMessage) {
+						Long id = ((ClientStatusMessage) o).source_;
+						if (id == UserManager.instance().getCurrentUserID())
+							return;
+					}
+					Framework.instance().distributeMessage((NotificationMessage) o);
+				}
+			} catch (JMSException e) {
+				e.printStackTrace();
+			}
+
+		}
+	}
+}

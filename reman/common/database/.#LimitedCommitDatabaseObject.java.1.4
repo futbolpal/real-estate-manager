@@ -1,0 +1,35 @@
+package reman.common.database;
+
+import java.sql.SQLException;
+
+import reman.common.database.exceptions.DatabaseException;
+import reman.common.database.exceptions.ExceedMaxCommitException;
+
+/**
+ * Once this object is committed to the database it will not be allowed to be re-committed.
+ * @author Scott
+ *
+ */
+public class LimitedCommitDatabaseObject extends DatabaseObject {
+	private int max_allowed_commits_;
+
+	public LimitedCommitDatabaseObject(int max_allowed_commits) {
+		this.max_allowed_commits_ = max_allowed_commits;
+	}
+
+	@Override
+	public long commit() throws SQLException, DatabaseException {
+
+		/*find the MAX version of the current version chain*/
+		int current_max_version = super.getLatestVersionNumber();
+		if (this.max_allowed_commits_ > current_max_version)
+			return super.commit();
+		throw new ExceedMaxCommitException(this,
+				"Attempt to commit more times then allowed. Current max version is '" + current_max_version
+						+ "'. Max allowed version is '" + this.max_allowed_commits_ + "'.");
+	}
+
+	protected int getMaxAllowedCommits() {
+		return this.max_allowed_commits_;
+	}
+}

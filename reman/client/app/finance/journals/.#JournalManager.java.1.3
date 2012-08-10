@@ -1,0 +1,123 @@
+package reman.client.app.finance.journals;
+
+import java.sql.SQLException;
+import java.util.Hashtable;
+
+import reman.client.app.OfficeProject;
+import reman.client.app.finance.FinanceException;
+import reman.common.database.DatabaseObject;
+import reman.common.database.OfficeProjectManager;
+import reman.common.database.exceptions.LockedException;
+
+/**
+ * Controls the creation/access of journals. Has a direct method to obtain the general journal.
+ * @author Scott
+ *
+ */
+public class JournalManager extends DatabaseObject {
+
+	private transient static JournalManager this_;
+
+	/**
+	 * Journal indexed by their name
+	 */
+	private Hashtable<String, Journal> journals_;
+
+	private JournalManager() {
+		journals_ = new Hashtable<String, Journal>();
+	}
+
+	public static JournalManager instance() {
+		if (this_ == null)
+			this_ = new JournalManager();
+		return this_;
+	}
+
+	/**
+	 * Create a new journal
+	 * @param journal_name
+	 * @return The journal that was created.  Null if not successfully created.
+	 * @throws InstantiationException 
+	 * @throws ClassNotFoundException 
+	 * @throws NoSuchFieldException 
+	 * @throws IllegalAccessException 
+	 * @throws SQLException 
+	 * @throws SecurityException 
+	 * @throws IllegalArgumentException 
+	 */
+	public Journal createJournal(String journal_name)
+			throws IllegalArgumentException, SecurityException, SQLException,
+			IllegalAccessException, NoSuchFieldException, ClassNotFoundException,
+			InstantiationException {
+		this.retrieve();//update journal map
+
+		if (this.journals_.containsKey(journal_name))
+			return null;
+
+		Journal journal = new Journal(journal_name);
+
+		this.journals_.put(journal_name, journal);
+
+		/*commit new journal to the database*/
+		this.commit();
+
+		return journal;
+	}
+
+	/**
+	 * 
+	 * @param journal_name
+	 * @return The journal from 'journals_' if it exists or null if no matching name account found
+	 * @throws InstantiationException 
+	 * @throws ClassNotFoundException 
+	 * @throws NoSuchFieldException 
+	 * @throws IllegalAccessException 
+	 * @throws SQLException 
+	 * @throws SecurityException 
+	 * @throws IllegalArgumentException 
+	 */
+	public Journal getJournal(String journal_name)
+			throws IllegalArgumentException, SecurityException, SQLException,
+			IllegalAccessException, NoSuchFieldException, ClassNotFoundException,
+			InstantiationException {
+		this.retrieve();//update journal map
+
+		return this.journals_.get(journal_name);
+	}
+
+	/**
+	 * 
+	 * @param journal_name
+	 * @param je
+	 * @return The key in the corresponding journal that this entry was added under. null if failed
+	 * @throws InstantiationException 
+	 * @throws ClassNotFoundException 
+	 * @throws NoSuchFieldException 
+	 * @throws IllegalAccessException 
+	 * @throws SQLException 
+	 * @throws SecurityException 
+	 * @throws IllegalArgumentException 
+	 * @throws LockedException 
+	 * @throws FinanceException 
+
+	 */
+	public Integer addJournalEntry(String journal_name, JournalEntry je)
+			throws IllegalArgumentException, SecurityException, SQLException,
+			IllegalAccessException, NoSuchFieldException, ClassNotFoundException,
+			InstantiationException, FinanceException, LockedException {
+
+		this.retrieve();/*update journal map*/
+
+		Journal curr_journal = this.getJournal(journal_name);
+		if (curr_journal == null)
+			throw new IllegalArgumentException(
+					"journal_name must reference a journal contained within this JournalManager");
+
+		Integer result_key = curr_journal.addJournalEntry(je);
+
+		if (result_key != null)
+			this.commit();/*commit new list to the database*/
+
+		return result_key;
+	}
+}

@@ -1,0 +1,395 @@
+package reman.client.app.finance.accounts;
+
+import java.sql.SQLException;
+import java.util.Collection;
+import java.util.Enumeration;
+import java.util.Hashtable;
+import java.util.Vector;
+
+import reman.client.app.finance.FinanceManager;
+import reman.client.app.finance.TransactionType;
+import reman.client.app.finance.accounts.exceptions.InvalidAmountException;
+import reman.client.app.finance.accounts.exceptions.InvalidCategoryException;
+import reman.client.app.finance.accounts.exceptions.UnknownNodeException;
+import reman.client.app.finance.exceptions.FinanceException;
+import reman.client.app.finance.exceptions.NameAlreadyExistsException;
+import reman.client.app.finance.journals.Journal;
+import reman.client.app.finance.journals.JournalEntry;
+import reman.client.app.finance.journals.JournalEntryLineItem;
+import reman.client.app.finance.journals.exceptions.InvalidJournalEntryException;
+import reman.client.app.trees.MapTreeTraverseUtility;
+import reman.common.database.DatabaseObject;
+import reman.common.database.exceptions.DatabaseException;
+import reman.common.database.exceptions.DatabaseObjectException;
+import reman.common.database.exceptions.NotPersistedException;
+
+/**
+ * To create a new account and manage existing accounts per office project. Accounts are keyed by their name.
+ * 
+ * @author Scott
+ *
+ */
+public class AccountManager extends DatabaseObject {
+
+	/**
+	 * These are the root level accounts in the account tree, tree relations (parent, children) are maintained within each Account
+	 */
+	private Hashtable<String, Account> root_accounts_;
+
+	public AccountManager() {
+		root_accounts_ = new Hashtable<String, Account>();
+	}
+
+	/**
+	 * Obtain the first matching result (breadth first search) that has the key of acct_name
+	 * @param acct_name
+	 * @return
+	 * @throws SQLException 
+	 * @throws DatabaseException 
+	 */
+	public Account getAccount(String acct_name) throws DatabaseException, SQLException {
+		this.retrieve();//ensure account map up to date
+
+		return (new MapTreeTraverseUtility<String, Account>().getTargetNode(this.root_accounts_,
+				acct_name));
+	}
+
+	/**
+	 * Get all accounts where their types equal param 'type'. Indexed by account name
+	 * It is assumed that child AcctType can not differ from their parent acct types
+	 * 
+	 * @param type
+	 * @return 
+	 * @throws SQLException 
+	 * @throws DatabaseException 
+	 */
+	public Collection<Account> getExistingSubTypes(AcctType type) throws DatabaseException,
+			SQLException {
+		this.retrieve();//ensure account map up to date
+
+		/*TODO: can child AcctType vary from parent AcctType? assumed no...*/
+		Vector<Account> sub_types = new Vector<Account>();
+
+		Enumeration<Account> all_root_accts = this.root_accounts_.elements();
+		while (all_root_accts.hasMoreElements()) {
+			Account curr_root_acct = all_root_accts.nextElement();
+			if (curr_root_acct.getAcctType() == type)
+				sub_types.add(curr_root_acct);
+		}
+
+		return sub_types;
+	}
+
+	/**
+	 * Removes the account with the corresponding key from the map of accounts.
+	 * @param acct_name
+	 * @return The account that was removed. 'null' if not account removed
+	 * @throws IllegalArgumentException
+	 * @throws SecurityException
+	 * @throws DatabaseObjectException
+	 * @throws SQLException
+	 * @throws IllegalAccessException
+	 * @throws NoSuchFieldException
+	 * @throws ClassNotFoundException
+	 * @throws InstantiationException
+	 * @throws InvocationTargetException
+	 * @throws NoSuchMethodException
+	 * @throws LoggedInException
+	 */
+	/*public Account removeAccount(String acct_name) throws IllegalArgumentException,
+			SecurityException, DatabaseObjectException, SQLException, IllegalAccessException,
+			NoSuchFieldException, ClassNotFoundException, InstantiationException,
+			InvocationTargetException, NoSuchMethodException, LoggedInException {
+
+		TODO: remove all child accounts to?  Then need to update the child/parent mapping too.
+		  			Also should the account be allowed to have a balance when removed?
+		 				if so then does that balance get transfered to a parent account?
+	
+		this.retrieve();
+
+		Account removed_acct = null;
+		if (this.lock()) {
+			removed_acct = this.accounts_.remove(acct_name);
+			this.commit();
+			this.unlock();
+		}
+
+		return removed_acct;
+	}*/
+
+	/**
+	 * This is slower than removing by key.
+	 * @param acct
+	 * @return
+	 * @throws IllegalArgumentException
+	 * @throws SecurityException
+	 * @throws DatabaseObjectException
+	 * @throws SQLException
+	 * @throws IllegalAccessException
+	 * @throws NoSuchFieldException
+	 * @throws ClassNotFoundException
+	 * @throws InstantiationException
+	 * @throws InvocationTargetException
+	 * @throws NoSuchMethodException
+	 * @throws LoggedInException
+	 */
+	/*public Account removeAccount(Account acct) throws IllegalArgumentException, SecurityException,
+			DatabaseObjectException, SQLException, IllegalAccessException, NoSuchFieldException,
+			ClassNotFoundException, InstantiationException, InvocationTargetException,
+			NoSuchMethodException, LoggedInException {
+		return this.removeAccount(acct.getName());
+	}*/
+
+	/**
+	 * Used to create an account within the current project. 'balance' will only be considered if the
+	 * program is in the initialization state with respect to finances. If the parent account is null then it is considered
+	 * a root account, and added to the root account map
+	 * 
+	 * @param name Name of the account. Key in hashtable of accounts (Must be unique with respect to other accounts).
+	 * @param balance Starting balance of the account.  Only relevant if program in initialization of finances state. Can be passed as 'null'
+	 * @param parent_acct Parent type (if applicable) of this account.  Can be passed as 'null'.
+	 * @param a_type This account type.  If a 'parent_acct' is passed this much match the 'parent_acct' type
+	 * @param normal_balance What type of transaction increases this account.
+	 * @param t_scale
+	 * @return The account that was created and maintained within this AccountManager, null if failure to create.
+	 * @throws SQLException 
+	 * @throws FinanceException 
+	 * @throws UnknownNodeException
+	 * @throws DatabaseException 
+	 */
+	public Account createAccount(String name, AcctAmount balance, Account parent_acct,
+			AcctType a_type, TransactionType normal_balance, AcctTimeScale t_scale)
+			throws DatabaseException, SQLException {
+
+		this.retrieve();//ensure account map up to date
+
+		Account acct = null;
+
+		if (this.lock()) {
+			try {
+				this.validateNewAccountInfo(name, parent_acct, a_type);
+			} catch (IllegalArgumentException e) {
+				this.unlock();
+				throw e;
+			} catch (NameAlreadyExistsException e) {
+				this.unlock();
+				throw e;
+			}
+
+			if (FinanceManager.instance().isInitilizationPhase() && balance != null)
+				acct = new Account(name, parent_acct, a_type, balance, normal_balance, t_scale);
+			else
+				acct = new Account(name, parent_acct, a_type, normal_balance, t_scale);
+
+			acct.commit();
+			if (parent_acct == null)
+				this.root_accounts_.put(name, acct);
+			else
+				parent_acct.addChildAccount(acct);
+
+			/*commit new list to the database*/
+			this.commit();
+			this.unlock();
+		}
+
+		return acct;
+	}
+
+	/**
+	 * Used to create/register a temporary account. 'balance' will only be considered if the
+	 * program is in the initialization state with respect to finances.
+	 * @param name
+	 * @param balance
+	 * @param parent_acct
+	 * @param close_to_acct
+	 * @param a_type
+	 * @param normal_balance
+	 * @param close_to_category For automated temporary account closings. Must be valid with respect to close_to_accout at time of account closing (statement generation).
+	 * 								The category to associate the close_to_acct_ journal entry line item receiving this accounts balance
+	 * @param close_from_category For automated temporary account closings. Must be valid with respect to this account's categories at time of closing (statement generation).
+	 * 								The category associated with this accounts closing journal entry line item
+	 * @return The account that was created and maintained within this AccountManager, null if failure to create. 
+	 * @throws SQLException 
+	 * @throws DatabaseException 
+	 */
+	public TemporaryAccount createTempAccount(String name, AcctAmount balance, Account parent_acct,
+			Account close_to_acct, AcctType a_type, TransactionType normal_balance,
+			Journal close_to_journal, AcctActionCategory close_from_category,
+			AcctActionCategory close_to_category) throws NameAlreadyExistsException, FinanceException,
+			UnknownNodeException, DatabaseException, SQLException {
+
+		this.retrieve();//ensure account map up to date
+
+		TemporaryAccount temp_acct = null;
+
+		if (this.lock()) {
+
+			try {
+				this.validateNewAccountInfo(name, parent_acct, a_type);
+			} catch (IllegalArgumentException e) {
+				this.unlock();
+				throw e;
+			} catch (NameAlreadyExistsException e) {
+				this.unlock();
+				throw e;
+			}
+
+			Account maintained_close_to_acct = (new MapTreeTraverseUtility<String, Account>()
+					.getTargetNode(this.root_accounts_, close_to_acct));
+
+			if (maintained_close_to_acct == null) {
+				this.unlock();
+				throw new IllegalArgumentException(
+						"close_to_acct must be maintained by this AccountManager.");
+			}
+
+			if (FinanceManager.instance().isInitilizationPhase() && balance != null)
+				temp_acct = new TemporaryAccount(name, parent_acct, balance, close_to_acct, a_type,
+						normal_balance, close_to_journal, close_from_category, close_to_category);
+			else
+				temp_acct = new TemporaryAccount(name, parent_acct, close_to_acct, a_type, normal_balance,
+						close_to_journal, close_from_category, close_to_category);
+
+			temp_acct.commit();
+			if (parent_acct == null)
+				this.root_accounts_.put(name, temp_acct);
+			else
+				parent_acct.addChildAccount(temp_acct);
+
+			/*commit new list to the database*/
+			this.commit();
+			this.unlock();
+		}
+
+		return temp_acct;
+	}
+
+	private void validateNewAccountInfo(String name, Account parent_acct, AcctType a_type)
+			throws IllegalArgumentException, NameAlreadyExistsException, FinanceException,
+			UnknownNodeException, DatabaseException, SQLException {
+		if (name == null || name.isEmpty())
+			throw new IllegalArgumentException("Name must not be null or empty.");
+
+		this.retrieve();
+		/*check for duplicate name, and that parent already exists in the list*/
+		MapTreeTraverseUtility<String, Account> ttu = new MapTreeTraverseUtility<String, Account>();
+
+		Account maintained_duplicate_acct = ttu.getTargetNode(this.root_accounts_, name);
+		Account maintained_parent_acct = ttu.getTargetNode(this.root_accounts_, parent_acct);
+
+		if (maintained_duplicate_acct != null)
+			throw new NameAlreadyExistsException(maintained_duplicate_acct);
+		if (parent_acct != null && maintained_parent_acct == null)
+			throw new FinanceException(parent_acct, "Parent account '" + parent_acct.getName()
+					+ "' must be maintained by this AccountManager.");
+
+		/*TODO: verify that sub accounts always have the same account type as parent type*/
+		if (parent_acct != null) {
+			if (parent_acct.getAcctType() != a_type)
+				throw new IllegalArgumentException("Parent account type '" + parent_acct.getAcctType()
+						+ "' must be equal to '" + a_type + "'.");
+			if (ttu.getTargetNode(this.root_accounts_, parent_acct) == null) {
+				throw new UnknownNodeException(parent_acct, "Parent account '" + parent_acct.getName()
+						+ "' must be maintained by this AccountManager.");
+			}
+		}
+	}
+
+	/**
+	 * @param temp_acct
+	 * @param close_from_category If the close_from account requires a category, a valid one must be provided
+	 * @param close_to_category If the close_to account requires a category, a valid one must be provided
+	 * @return
+	 * @throws SQLException 
+	 * @throws DatabaseException 
+	 */
+	public Integer closeAccount(TemporaryAccount temp_acct) throws InvalidJournalEntryException,
+			InvalidAmountException, InvalidCategoryException, UnknownNodeException, DatabaseException,
+			SQLException {
+		return this.closeAccount(temp_acct, temp_acct.getCloseToAccount(), temp_acct
+				.getCloseFromCategory(), temp_acct.getCloseToCategory(), temp_acct.getCloseToJournal());
+	}
+
+	/**
+	 * Close 'close_from' into 'close_to'. Both accounts must reside in the 'accounts_' list.
+	 * The resulting journal entry is recorded in the general journal.
+	 * 
+	 * @param close_from
+	 * @param close_to
+	 * @param record_result_to The journal where the resulting journal entry will be recorded to
+	 * @param close_from_category If the close_from account requires a category, a valid one must be provided
+	 * @param close_to_category If the close_to account requires a category, a valid one must be provided
+	 * @return True key of entry in 'record_result_to' journal if successful, null otherwise
+	 * @throws SQLException 
+	 * @throws DatabaseException 
+	 */
+	public Integer closeAccount(Account close_from, Account close_to,
+			AcctActionCategory close_from_category, AcctActionCategory close_to_category,
+			Journal record_result_to) throws InvalidJournalEntryException, InvalidAmountException,
+			InvalidCategoryException, UnknownNodeException, DatabaseException, SQLException {
+
+		this.retrieve();//ensure account map up to date
+
+		Integer entry_key = null;
+
+		if (this.lock()) {
+			MapTreeTraverseUtility<String, Account> ttu = new MapTreeTraverseUtility<String, Account>();
+
+			if (ttu.getTargetNode(this.root_accounts_, close_from) == null) {
+				this.unlock();
+				throw new UnknownNodeException(close_from, "The Account '" + close_from.getName()
+						+ "' is not known by the AccountManager.");
+			}
+			if (ttu.getTargetNode(this.root_accounts_, close_to) == null) {
+				this.unlock();
+				throw new UnknownNodeException(close_to, "The Account '" + close_to.getName()
+						+ "' is not known by the AccountManager.");
+			}
+			if (record_result_to == null) {
+				this.unlock();
+				throw new IllegalArgumentException(
+						"close_from and close_to must be contined within this AccountManager.  record_result_to can not be null.");
+			}
+
+			/*TODO: does an account need to be a 'TEMPORARY' account to close?*/
+			try {
+				/*close_from_amount will zero the close_from account balance*/
+				JournalEntry je = new JournalEntry("Closing account '" + close_from.getName()
+						+ "' into account '" + close_to.getName() + "'.", null);
+				je.addLineItem(new JournalEntryLineItem(close_to, new AcctAmount(close_from
+						.getBalanceSystem().getAcctAmount().getAmount(), close_from.getBalanceSystem()
+						.getAcctAmount().getTransactionType()), "Result of closing account '"
+						+ close_from.getName() + "'.", close_to_category));
+				je.addLineItem(new JournalEntryLineItem(close_from, new AcctAmount(close_from
+						.getBalanceSystem().getAcctAmount().getAmount(), TransactionType.getOpposite(close_from
+						.getBalanceSystem().getAcctAmount().getTransactionType())), "Closing account '"
+						+ close_from.getName() + ".", close_from_category));
+				entry_key = record_result_to.addJournalEntry(je);
+			} catch (RuntimeException e) {
+				this.unlock();
+				throw e;
+			} catch (DatabaseObjectException e) {
+				this.unlock();
+				throw e;
+			} catch (SQLException e) {
+				this.unlock();
+				throw e;
+			}
+
+			if (entry_key != null)
+				this.commit();/*commit changed accounts to the database*/
+			this.unlock();
+		}
+
+		return entry_key;
+	}
+
+	@Override
+	public void retrieve() throws DatabaseException, SQLException {
+		try {
+			super.retrieve();
+		} catch (NotPersistedException e) {
+			/*because this manager will automate a retrieve, disregard a not in database exception*/
+		}
+	}
+}

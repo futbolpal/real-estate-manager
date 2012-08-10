@@ -1,0 +1,486 @@
+package reman.common.database;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.security.MessageDigest;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.Date;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Hashtable;
+import java.util.Map;
+
+import reman.common.SQLServer;
+
+/**
+ * This is a utility class which provides convenience methods to enhance overall uniformity
+ * among database interactions.
+ * <BR><BR>
+ * This class provides ALL static utility methods and there is no need to declare an instance of it
+ * @author jonathan
+ *
+ */
+public class DatabaseManager {
+	private static Hashtable<Class, String> bindings_ = new Hashtable<Class, String>();
+	private static ArrayList<Class> registered_classes_ = new ArrayList<Class>();
+	private static ArrayList<Class> partial_classes_ = new ArrayList<Class>();
+	private static Connection conn_;
+
+	static {
+		bindings_.put(String.class, "VARCHAR(255)");
+		bindings_.put(boolean.class, "BOOLEAN");
+		bindings_.put(Boolean.class, "BOOLEAN");
+		bindings_.put(byte.class, "TINYINT");
+		bindings_.put(Byte.class, "TINYINT");
+		bindings_.put(short.class, "SMALLINT");
+		bindings_.put(Short.class, "SMALLINT");
+		bindings_.put(int.class, "INTEGER");
+		bindings_.put(Integer.class, "INTEGER");
+		bindings_.put(long.class, "BIGINT");
+		bindings_.put(Long.class, "BIGINT");
+		bindings_.put(float.class, "FLOAT");
+		bindings_.put(Float.class, "FLOAT");
+		bindings_.put(double.class, "DOUBLE");
+		bindings_.put(Double.class, "DOUBLE");
+		bindings_.put(byte[].class, "BINARY");
+		bindings_.put(Byte[].class, "BINARY");
+		bindings_.put(Date.class, "DATE");
+		bindings_.put(Time.class, "TIME");
+		bindings_.put(Timestamp.class, "TIMESTAMP");
+
+		conn_ = SQLServer.WILL_JON().connect();
+		System.out.println("Connected.");
+
+		LockManager.instance();
+	};
+
+	/**
+	 * Returns the table name for a class name.  This function should be used ANY time 
+	 * a table name for a class needs to be determined.  This provides uniformity and a 
+	 * one-stop place to change the way the table names are determined.  
+	 * <BR><BR>
+	 * A table name can only be 32 characters long.  Since classes in different packages
+	 * could potentially have the same name, the entire name of the class, including its path
+	 * is used to determine the table.  To enhance readability, the simple class name is used first
+	 * and appended with a hash of the package.  
+	 * <BR><BR>
+	 * @param c - The class for which a table name needs to be determined
+	 * @return String - A 32 character (max) string that is the table name corresponding
+	 * with the class c passed into the function
+	 */
+	public static String getTableName(Class c) {
+		byte[] hashBytes = c.getName().getBytes();
+		try {
+			MessageDigest algorithm = MessageDigest.getInstance("MD5");
+			algorithm.reset();
+			algorithm.update(hashBytes);
+			byte messageDigest[] = algorithm.digest();
+
+			StringBuffer hexString = new StringBuffer();
+			for (int i = 0; i < messageDigest.length; i++) {
+				hexString.append(Integer.toHexString(0xFF & messageDigest[i]));
+			}
+			return c.getSimpleName().substring(0, Math.min(c.getSimpleName().length(), 32))
+					+ hexString.toString();
+		} catch (Exception e) {
+			e.printStackTrace();
+			return null;
+		}
+	}
+
+	/**
+	 * This function uses a field as a parameter and determines a corresponding table
+	 * name.  Lists are prefixed with "list_" and maps are prefixed with "map_".  
+	 * 
+	 * @param f - The field for which a table name needs to be determined
+	 * @return String - a 32 character (max) string indicating the corresponding table
+	 * for the field f passed into the function
+	 */
+	public static String getTableName(Field f) {
+		String tablename = new String();
+		Class c = f.getType();
+		if (isCollection(c)) {
+			tablename += "list_";
+		} else if (isMap(c)) {
+			tablename += "map_";
+		} else {
+			// ?
+		}
+
+		try {
+			MessageDigest algorithm = MessageDigest.getInstance("MD5");
+			algorithm.reset();
+
+			Class[] classes = getGenericClasses(f);
+			for (Class gc : classes) {
+				tablename += gc.getSimpleName() + "_";
+				algorithm.update(gc.getSimpleName().getBytes());
+			}
+			byte messageDigest[] = algorithm.digest();
+
+			StringBuffer hexString = new StringBuffer();
+			for (int i = 0; i < messageDigest.length; i++) {
+				hexString.append(Integer.toHexString(0xFF & messageDigest[i]));
+			}
+			return tablename.substring(0, Math.min(tablename.length(), 32)) + hexString.toString();
+		} catch (Exception e) {
+			e.printStackTrace();
+			return null;
+		}
+	}
+
+	/**
+	 * This function examines a field for a class and determines, if any, the 
+	 * generic classes associated with the field.  For example, a field 
+	 * "ArrayList<Integer> sample_" is a field with one generic class
+	 * Integer.  
+	 * <BR><BR>
+	 * If the field contains no generic classes, null is returned.  
+	 * @param f - the field for which the generic classes are to be determined
+	 * @return Class[] of classes for the generics associated with the field
+	 * or null if there are none.  
+	 * @throws ClassNotFoundException
+	 */
+	public static Class[] getGenericClasses(Field f) {
+		try {
+			Type t = f.getGenericType();
+			if (t instanceof ParameterizedType) {
+				ParameterizedType pt = (ParameterizedType) t;
+				Type[] types = pt.getActualTypeArguments();
+				Class[] classes = new Class[types.length];
+				for (int i = 0; i < types.length; i++) {
+					String[] tokens = types[i].toString().split("[ ]|[<]");
+					classes[i] = Class.forName(tokens[1]);
+				}
+				return classes;
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return null;
+	}
+
+	private static Class[] getGenericClasses(String s) {
+		return null;
+	}
+
+	/**
+	 * This function registers a class with the database.  If the class is not
+	 * represented in the database by a table, a table is created. If the
+	 * class contains members that are not in the table, columns are added.  
+	 * If the class contains members that are lists, a table is created to
+	 * manage the list.
+	 * <BR><BR>
+	 * If the class contains members that are Java objects, the FKEY is
+	 * stored in the column.  If the class contains members that are
+	 * primitives, the column is created normally.
+	 * <BR><BR>
+	 * A class may contain a field that is a DatabaseObject.  Partially registered classes
+	 * are stored to prevent infinite loops and stack overflow
+	 * 
+	 * @param c - The class to be registered 
+	 */
+	public static void registerClass(Class c) {
+		/*
+		 * Register a class if it is not verified, otherwise, skip
+		 */
+		if (registered_classes_.contains(c))
+			return;
+		if (c.equals(Object.class))
+			return;
+		if (partial_classes_.contains(c))
+			return;
+
+		partial_classes_.add(c);
+
+		try {
+			Statement stmt = conn_.createStatement();
+			String sql;
+
+			DatabaseMetaData dbmd = conn_.getMetaData();
+			String[] types = { "TABLE" };
+			ResultSet db_tables = dbmd.getTables(null, null, "%", types);
+
+			/* First check that the table exists for this class */
+			boolean found = false;
+			while (!found && db_tables.next()) {
+				String tableName = db_tables.getString(3);
+				if (tableName.equalsIgnoreCase(getTableName(c)))
+					found = true;
+			}
+			db_tables.first();
+
+			if (!found) {
+				// Simply create the table and add default columns
+				sql = "CREATE TABLE " + getTableName(c)
+						+ " (ID BIGINT NOT NULL AUTO_INCREMENT,PRIMARY KEY(ID),PID BIGINT)";
+				stmt.executeUpdate(sql);
+			}
+
+			/* The table exists, lets check the columns */
+			stmt = conn_.createStatement();
+			ResultSet rs = stmt.executeQuery("SELECT * FROM " + getTableName(c));
+			Field[] class_fields = c.getDeclaredFields();
+			ArrayList<String> columns = new ArrayList<String>();
+			for (int i = 0; i < rs.getMetaData().getColumnCount(); i++) {
+				columns.add(rs.getMetaData().getColumnName(i + 1));
+			}
+
+			for (Field f : class_fields) {
+				if (!isPersisted(f))
+					continue;
+				if (isCollection(f.getType())) {
+					// handle collection by adding new table
+					// handles collections of complex types and primitive types
+					/* Create table for list */
+					Class[] gClass = getGenericClasses(f);
+					sql = "CREATE TABLE IF NOT EXISTS "
+							+ DatabaseManager.getTableName(f)
+							+ " (ID BIGINT NOT NULL AUTO_INCREMENT,PRIMARY KEY(ID),OID VARCHAR(255), VERSION BIGINT, CLASS VARCHAR(255), FIELD VARCHAR(255), DECLARED_CLASS VARCHAR(255), "
+							+ "DATA " + getSQLType(gClass[0]) + ")";
+					stmt.execute(sql);
+				} else if (isMap(f.getType())) {
+					// handle map by adding a new table of format:
+					/* name: map_[key class]_[value class] */
+					/* columns: ID OID CLASS KEY VALUE */
+					Class[] gClasses = getGenericClasses(f);
+					Class keyClass = gClasses[0];
+					Class valueClass = gClasses[1];
+					sql = "CREATE TABLE IF NOT EXISTS "
+							+ DatabaseManager.getTableName(f)
+							+ " (ID BIGINT NOT NULL AUTO_INCREMENT,PRIMARY KEY(ID),OID VARCHAR(255), VERSION BIGINT, CLASS VARCHAR(255), FIELD VARCHAR(255), KEY_DECLARED_CLASS VARCHAR(255), VALUE_DECLARED_CLASS VARCHAR(255), "
+							+ "obj_key " + getSQLType(keyClass) + "," + "obj_val " + getSQLType(valueClass) + ")";
+					stmt.execute(sql);
+				} else {
+					if (!columns.contains(f.getName())) // column for this field
+					// does not exist
+					{
+						sql = "ALTER TABLE " + getTableName(c) + " ADD " + f.getName() + " "
+								+ getSQLType(f.getType());
+						stmt.execute(sql);
+					}
+
+				}
+			}
+
+			/* We need to do the same going up the chain */
+			if (c.getSuperclass() != null)
+				registerClass(c.getSuperclass());
+
+			registered_classes_.add(c);
+			partial_classes_.remove(c);
+
+		} catch (SQLException e) {
+			e.printStackTrace();
+		} catch (SecurityException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * Returns the SQL Type associated with the java type.  Bindings are hardcoded
+	 * in this class.  
+	 * <BR><BR>
+	 * If the class is not represented in the bindings, it could be an enum.  If not,
+	 * it must be a complex object in which case it must first be registered.  
+	 * 
+	 * @param c- Class to map to SQL
+	 * @return String - SQL data type in for available to be directly placed in a valid
+	 * SQL statement
+	 * @throws InstantiationException
+	 * @throws IllegalAccessException
+	 */
+	public static String getSQLType(Class c) {
+		if (bindings_.containsKey(c))
+			return bindings_.get(c);
+
+		// we might have an enum
+		if (c.isEnum()) {
+			return "VARCHAR(255)";
+		}
+
+		// we must have a complex object (use version chain)
+		registerClass(c);
+		return "VARCHAR(255)";
+	}
+
+	/**
+	 * Determine if a class is a basic SQL data type.  
+	 * 
+	 * @param c - The class to be tested
+	 * @return true if the class is a primitive or a 
+	 * string or a timestamp or an enum.  
+	 * 
+	 * false if the class is a complex type.  
+	 */
+	public static boolean isSQLType(Class c) {
+		return bindings_.containsKey(c) || isEnum(c);
+	}
+
+	/**
+	 * This is a utility method to determine if a class extends
+	 * DatabaseObject at some point in it's heirarchy.  
+	 * 
+	 * @param c - The class to be tested
+	 * @return true if the class extends DatabaseObject
+	 */
+	public static boolean isDatabaseObject(Class c) {
+		while (c != null && !c.equals(Object.class)) {
+			if (c.equals(DatabaseObject.class))
+				return true;
+			c = c.getSuperclass();
+		}
+		return false;
+	}
+
+	/**
+	 * This is a utility method to determine if the class
+	 * is an enumeration
+	 * @param c -  The class to be tested
+	 * @return true if the class is an enum and false if not.
+	 */
+	public static boolean isEnum(Class c) {
+		return c.isEnum();
+	}
+
+	/**
+	 * This is a utility method to determine if the class is 
+	 * a collection.  
+	 * @param c - the class to be tested
+	 * @return true if the class is a collection.  
+	 * 
+	 * @see http://www.math.tu-berlin.de/geometrie/f5/j2sdk_docs/guide/collections/reference.html
+	 */
+	public static boolean isCollection(Class c) {
+		try {
+			return (c.newInstance() instanceof Collection);
+		} catch (Exception e) {
+			return false;
+		}
+	}
+
+	public static boolean isSingleton(Class c) {
+		try {
+			Method m = c.getDeclaredMethod("instance", null);
+			return true;
+		} catch (Exception e) {
+			return false;
+		}
+	}
+
+	/**
+	 * This is a utility method to determine if the class is 
+	 * a map.  
+	 * @param c - the class to be tested
+	 * @return true if the class is a map.  
+	 * 
+	 * @see http://www.math.tu-berlin.de/geometrie/f5/j2sdk_docs/guide/collections/reference.html
+	 */
+	public static boolean isMap(Class c) {
+		try {
+			return (c.newInstance() instanceof Map);
+		} catch (Exception e) {
+			return false;
+		}
+	}
+
+	/**
+	 * Determine if a field should be persisted into the database.  
+	 * Fields that are transient and/or static are not persisted
+	 * 
+	 * @param f - the Field to be tested
+	 * @return true if the field  is not static and not transient, false otherwise
+	 */
+	public static boolean isPersisted(Field f) {
+		int m = f.getModifiers();
+		return !(Modifier.isStatic(m) || Modifier.isTransient(m));
+	}
+
+	/**
+	 * Creates a statement that can be used to send queries to the database.  The statement is
+	 * scroll sensitive and updatable.  
+	 * 
+	 * @return Statement object
+	 * @throws SQLException
+	 */
+	private static Statement getStatement() throws SQLException {
+		return conn_.createStatement(ResultSet.TYPE_SCROLL_SENSITIVE, ResultSet.CONCUR_UPDATABLE);
+	}
+
+	/**
+	 * Executes a query against the database.  All database queries should use this function
+	 * @param sql - The SQL query to be sent to the server
+	 * @return ResultSet - the result set satisfying the query.  
+	 * @throws SQLException
+	 */
+	public static ResultSet executeQuery(String sql) throws SQLException {
+		Statement s = DatabaseManager.getStatement();
+		return s.executeQuery(sql);
+	}
+
+	/**
+	 * Executes an update against the database.  All database updates should use this function
+	 * @param sql - The SQL update to be sent to the server
+	 * @return The statement used to execute the update.  The statement contains information about the 
+	 * update.    
+	 * @throws SQLException
+	 */
+	public static Statement executeUpdate(String sql) throws SQLException {
+		Statement s = DatabaseManager.getStatement();
+		s.execute(sql);
+		return s;
+	}
+
+	/**
+	 * This function creates a batch of statements to be executed atomically.  
+	 * For the first batch, null should be passed in the second parameter.  As a 
+	 * result, the Statement returned  should be used in subsequent batch calls.  
+	 * 
+	 * @param sql - The SQL statement to be added to the batch
+	 * @param batch - null for a new batch or a statement containing an on
+	 * going batch
+	 * @return - a statement to be used for future batches
+	 * @throws SQLException
+	 */
+	public static Statement addBatch(String sql, Statement batch) throws SQLException {
+		if (batch == null)
+			batch = DatabaseManager.getStatement();
+		batch.addBatch(sql);
+		return batch;
+	}
+
+	/**
+	 * This function will execute the batch that was created using the addBatch function.  
+	 *
+	 * @param batch - The batch to be executed on the server.
+	 * @returns nothing.  The statement that was passed into the function can
+	 * be used to determine any information necessary.  
+	 * @throws SQLException
+	 */
+	public static void executeBatch(Statement batch) throws SQLException {
+		batch.executeBatch();
+	}
+
+	/**
+	 * This is a utility function to determine the number of rows in a result set.  
+	 * @param rs - ResultSet to check row count
+	 * @return the number of rows in the result set.  
+	 * @throws SQLException
+	 */
+	public static int getRowCount(ResultSet rs) throws SQLException {
+		rs.last();
+		int rows = rs.getRow();
+		rs.first();
+		return rows;
+	}
+}

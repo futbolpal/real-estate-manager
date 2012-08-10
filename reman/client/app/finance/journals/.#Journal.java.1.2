@@ -1,0 +1,81 @@
+package reman.client.app.finance.journals;
+
+import java.sql.SQLException;
+import java.util.Enumeration;
+import java.util.Hashtable;
+
+import reman.client.app.finance.FinanceException;
+import reman.common.database.DatabaseObject;
+import reman.common.database.exceptions.LockedException;
+
+/**
+ * Storage for journal entries. Example: General Journal
+ * Maintains a hash table of journal entries and the keys where each journal entry will be located in the hash table.
+ * @author Scott
+ *
+ */
+public class Journal extends DatabaseObject {
+
+	private Hashtable<Integer, JournalEntry> journal_entries_;
+
+	/**
+	 * For DatabaseObject use only
+	 */
+	private Journal() {
+		this("Empty Constructor");
+	}
+
+	public Journal(String journalName) {
+		super.name_ = journalName;
+		this.journal_entries_ = new Hashtable<Integer, JournalEntry>();
+	}
+
+	/**
+	 * Parameter 'je' will be commited to the database, and must pass validation constraints before being added to a journal
+	 * 
+	 * @param je
+	 * @return The key of the journal entry. 'null' if unsuccessful
+	 * @throws ClassNotFoundException 
+	 * @throws IllegalAccessException 
+	 * @throws SQLException 
+	 * @throws IllegalArgumentException 
+	 * @throws FinanceException 
+	 * @throws LockedException 
+	 */
+	public Integer addJournalEntry(JournalEntry je)
+			throws IllegalArgumentException, SQLException, IllegalAccessException,
+			ClassNotFoundException, FinanceException, LockedException {
+		if (!je.isValid()) {
+			if (je.commit() < 0)
+				return null;
+		}
+
+		Integer key = this.getNextKey();
+		if (this.journal_entries_.containsKey(key))
+			return null;
+
+		this.journal_entries_.put(key, je);
+		return key;
+	}
+
+	public JournalEntry getJournalEntry(Integer key) {
+		return this.journal_entries_.get(key);
+	}
+
+	public Integer getKey(JournalEntry je) {
+		Integer matching_key = null;
+		Enumeration<Integer> all_keys = this.journal_entries_.keys();
+		while (all_keys.hasMoreElements()) {
+			Integer curr_key = all_keys.nextElement();
+			if (this.journal_entries_.get(curr_key).equals(je)) {
+				matching_key = curr_key;
+				break;
+			}
+		}
+		return matching_key;
+	}
+
+	private Integer getNextKey() {
+		return this.journal_entries_.size() + 1;
+	}
+}

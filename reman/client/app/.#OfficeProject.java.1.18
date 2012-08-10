@@ -1,0 +1,82 @@
+package reman.client.app;
+
+import java.util.ArrayList;
+
+import reman.client.app.finance.FinanceManager;
+import reman.client.app.finance.timer.TimeEventManager;
+import reman.client.app.office_maintenance.OfficeMaintenanceManager;
+import reman.client.basetypes.Agent;
+import reman.client.basetypes.ExpenseManager;
+import reman.client.basetypes.Listing;
+import reman.client.basetypes.Person;
+import reman.client.basetypes.RealEstateOffice;
+import reman.client.basetypes.Transaction;
+import reman.common.database.DatabaseObject;
+
+/**
+ * This class encapsulates ALL data in a project.  It acts as the root node
+ * for a retrieval.  
+ * @author jonathan
+ *
+ */
+public final class OfficeProject extends DatabaseObject {
+	private RealEstateOffice office_;
+	private String access_code_;
+	private FinanceManager finances_;
+	private TimeEventManager time_event_manager_;
+	private ExpenseManager expense_manager_;
+	private ArrayList<Listing> listings_;
+	private ArrayList<Transaction> sold_listings_;
+	private OfficeMaintenanceManager maintenance_;
+
+	public OfficeProject() {
+		this("");
+	}
+
+	public OfficeProject(String code) {
+		this.access_code_ = code;
+		this.time_event_manager_ = new TimeEventManager();
+		this.office_ = new RealEstateOffice();
+		this.finances_ = new FinanceManager();
+		this.expense_manager_ = new ExpenseManager();
+		this.maintenance_ = new OfficeMaintenanceManager();
+		this.listings_ = new ArrayList<Listing>();
+		this.sold_listings_ = new ArrayList<Transaction>();
+	}
+
+	public boolean isMember(Agent a) {
+		return office_.isMember(a);
+	}
+
+	public String getAccessCode() {
+		return access_code_;
+	}
+
+	public RealEstateOffice getOffice() {
+		return office_;
+	}
+
+	public FinanceManager getFinanceManager() {
+		return finances_;
+	}
+
+	public ExpenseManager getExpenseManager() {
+		return this.expense_manager_;
+	}
+
+	public TimeEventManager getTimeEventManager() {
+		return time_event_manager_;
+	}
+
+	public OfficeMaintenanceManager getOfficeMaintenanceManager() {
+		return maintenance_;
+	}
+
+	public ArrayList<Listing> getListings() {
+		return listings_;
+	}
+
+	public ArrayList<Transaction> getSoldListings() {
+		return sold_listings_;
+	}
+}

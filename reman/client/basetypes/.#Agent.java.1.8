@@ -1,0 +1,66 @@
+package reman.client.basetypes;
+
+import java.util.ArrayList;
+
+public class Agent extends OfficeWorker {
+	private ArrayList<String> credentials_;
+	private ArrayList<Agent> partners_;
+	private License license_;
+	private MLSInfo mls_;
+	private ArrayList<Fee> fees_;
+
+	public Agent() {
+		license_ = new License();
+		mls_ = new MLSInfo();
+		fees_ = new ArrayList<Fee>();
+		credentials_ = new ArrayList<String>();
+		partners_ = new ArrayList<Agent>();
+	}
+
+	public int getNumberOfPartners() {
+		return partners_.size();
+	}
+
+	public License getLicense() {
+		return license_;
+	}
+
+	public MLSInfo getMLSInfo() {
+		return mls_;
+	}
+
+	public void addFee(Fee f) {
+		fees_.add(f);
+	}
+
+	public void removeFee(Fee f) {
+		fees_.remove(f);
+	}
+
+	public void addPartner(Agent a) {
+		partners_.add(a);
+	}
+
+	public void removePartner(Agent a) {
+		partners_.remove(a);
+	}
+
+	public ArrayList<Agent> getPartners() {
+		return partners_;
+	}
+
+	public void addCredential(String c) {
+		credentials_.add(c);
+	}
+
+	public void removeCredentials(String c) {
+		credentials_.remove(c);
+	}
+
+	/** TODO remove after debug * */
+	public void printCredentials() {
+		System.out.println("Credentials: ");
+		for (String s : credentials_)
+			System.out.println(s);
+	}
+}

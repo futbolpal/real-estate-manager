@@ -1,0 +1,41 @@
+package reman.client.app;
+
+import java.sql.SQLException;
+
+import reman.client.app.finance.FinanceManager;
+import reman.client.basetypes.RealEstateOffice;
+import reman.common.database.DatabaseObject;
+import reman.common.database.exceptions.DatabaseException;
+
+public final class OfficeProject extends DatabaseObject {
+	private RealEstateOffice office_;
+	private String access_code_;
+
+	private FinanceManager finance_manager_;
+
+	public OfficeProject(String pcode, long pid) {
+		this.finance_manager_ = FinanceManager.instance();
+		this.access_code_ = pcode;
+		this.office_ = new RealEstateOffice();
+		this.setID(pid);
+	}
+
+	public String getAccessCode() {
+		return access_code_;
+	}
+
+	public RealEstateOffice getOffice() {
+		return office_;
+	}
+
+	public FinanceManager getFinanceManager() {
+		return this.finance_manager_;
+	}
+
+	public long commit() throws SQLException, DatabaseException {
+		finance_manager_.commit();
+		office_.commit();
+		long pid = super.commit();
+		return pid;
+	}
+}
